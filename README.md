@@ -9,13 +9,15 @@ This repository contains the logic, data governance, and integration architectur
 
 
 ### 2. 🛠 Tech Stack (Zero-Cost Tier)
--   **Interface:** Slack Bolt for Python (Socket Mode).
+Generally speaking the Tech Stack is open for you to choose from. However be mindfull about which technologies you choose and make sure to be able to argument about why you made which decision
 
--   **Brain:** Gemini 2.0 Flash.
+-   **Interface:** Slack Bolt for Python (Socket Mode). React or any other Web Framework. Python CLI with Textual
 
--   **Orchestration:** LangChain Agents or custom Python Router.
+-   **Brain:** Gemini 2.5 Flash (cheap) but any other model is fine as well (We will provie API keys for you). 
 
--   **Database:** ChromaDB (Local Vector Store) + SQLite (Session Memory)
+-   **Orchestration:** LangChain Agents, custom Python Router or Agent Development Kit from Google.
+
+-   **Database:** ChromaDB (Local Vector Store) + SQLite (Session Memory) or any other DB
 
 -   **Holidays:** https://www.openholidaysapi.org (Swiss/Cantonal data)
     
@@ -36,8 +38,7 @@ This repository contains the logic, data governance, and integration architectur
     
 
 ### 4. Project Objectives
-
-1.  **Spec-First Design:** Use GitHub Spec Kit to map the "Bereavement" and "Vacation" logic before coding.
+1. **Architectual Decisions** Each architectual decision has to be backed by rational decisions and should be able to be explained
 
 1.  **Multi-Tool Orchestrator:** Successfully identify if a user query needs to call an API, uses RAG or Python Logic.
     
