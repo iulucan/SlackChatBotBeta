@@ -2,7 +2,7 @@
 
 # 🌿 Project GreenLeaf: Enterprise AI HR Agent (Basel Ops)
 
-## Team: GreenLeaf | Track: Guided Lab (Weeks 1-4)
+## Team: PowerLeaf | Track: Guided Lab (Weeks 1-4)
 
 ### 1. Project Overview
 
