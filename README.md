@@ -14,7 +14,7 @@ Generally speaking the Tech Stack is open for you to choose from. However be min
 
 -   **Interface:** Slack Bolt for Python (Socket Mode), React (or any other Web Framework), or Python CLI with Textual.
 
--   **Brain:** Gemini 2.5 Flash (cheap), but any other model is fine as well. We will provie API keys for you upon request. 
+-   **Brain:** Gemini 2.5 Flash (cheap), but any other model is fine as well. We will provide API keys for you upon request. 
 
 -   **Orchestration:** LangChain Agents, custom Python Router or Agent Development Kit from Google.
 
