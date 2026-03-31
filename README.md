@@ -12,13 +12,13 @@ This repository contains the logic, data governance, and integration architectur
 ### 2. 🛠 Tech Stack (Zero-Cost Tier)
 Generally speaking the Tech Stack is open for you to choose from. However be mindfull about which technologies you choose and make sure to be able to argument about why you made which decision.
 
--   **Interface:** Slack Bolt for Python (Socket Mode), React (or any other Web Framework), or Python CLI with Textual.
+-   **Interface:** __Slack Bolt for Python (Socket Mode)__, React (or any other Web Framework), or Python CLI with Textual.
 
--   **Brain:** Gemini 2.5 Flash (cheap), but any other model is fine as well. We will provie API keys for you upon request. 
+-   **Brain:** Gemini 2.5 Flash (cheap), but any other model is fine as well. We will provide API keys for you upon request. 
 
--   **Orchestration:** LangChain Agents, custom Python Router or Agent Development Kit from Google.
+-   **Orchestration:** LangChain Agents, __custom Python Router__ or Agent Development Kit from Google.
 
--   **Database:** ChromaDB (Local Vector Store) + SQLite (Session Memory), or any equivalent.
+-   **Database:** __ChromaDB (Local Vector Store)__ + SQLite (Session Memory), or any equivalent.
 
 -   **External APIs:** OpenHolidays API (https://www.openholidaysapi.org) (For Swiss/Cantonal data).
     

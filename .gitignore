@@ -5,3 +5,9 @@ __pycache__/
 venv/
 vector_store/
 .DS_Store
+*.pyo
+*.pyd
+env/
+*.log
+.vscode/
+.idea/
