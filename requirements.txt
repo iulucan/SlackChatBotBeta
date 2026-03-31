@@ -1,0 +1,6 @@
+slack-bolt==1.21.2
+google-generativeai==0.8.3
+langchain==0.3.14
+chromadb==0.6.3
+requests==2.32.3
+python-dotenv==1.0.1
