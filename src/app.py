@@ -26,7 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 from dotenv import load_dotenv
-from src.privacy_gate import is_blocked, get_block_message
+from src.privacy_gate import clean_input, is_blocked, get_block_message
 
 # Load tokens from .env file (never hardcode tokens in code)
 load_dotenv()
@@ -35,25 +35,29 @@ load_dotenv()
 app = App(token=os.environ["SLACK_BOT_TOKEN"])
 
 
-@app.message("")
-def handle_message(message, say):
-    """
-    Handles all incoming Slack messages.
-    Flow:
-        1. Privacy gate — block sensitive queries
-        2. Brain router — route to correct tool (Week 3)
-    """
-    query = message.get("text", "")
+def process_query(raw_query, say):
+    """Shared logic for DM messages and channel mentions."""
+    query = clean_input(raw_query)
 
-    # Step 1 — Privacy gate check
-    # Blocks: Wi-Fi passwords, salary info, MAC addresses
     if is_blocked(query):
         say(get_block_message(query))
         return
 
-    # Step 2 — Brain router (coming Week 3)
-    # Will route to: policy_tool, holiday_tool, or expense_tool
     say(f"✅ Got your message: _{query}_\n> Privacy gate: passed\n> Brain: coming in Week 3!")
+
+
+@app.message("")
+def handle_message(message, say):
+    """Handles direct messages to the bot."""
+    raw_query = message.get("text", "")
+    process_query(raw_query, say)
+
+
+@app.event("app_mention")
+def handle_mention(event, say):
+    """Handles @GreenLeaf mentions in channels."""
+    raw_query = event.get("text", "")
+    process_query(raw_query, say)
 
 
 if __name__ == "__main__":
