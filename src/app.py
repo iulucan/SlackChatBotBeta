@@ -38,30 +38,29 @@ load_dotenv()
 app = App(token=os.environ["SLACK_BOT_TOKEN"])
 
 
-@app.message("")
-def handle_message(message, say):
-    """
-    Handles all incoming Slack messages.
-
-    Flow:
-        1. clean_input()  — mask PII (names, IDs, emails)
-        2. is_blocked()   — refuse sensitive or injected queries
-        3. brain.py       — route to correct tool (Week 3)
-    """
-    raw_query = message.get("text", "")
-
-    # Step 1 — Mask PII before any processing
-    # Original text is never logged or forwarded
+def process_query(raw_query, say):
+    """Shared logic for DM messages and channel mentions."""
     query = clean_input(raw_query)
 
-    # Step 2 — Block sensitive queries and prompt injection
     if is_blocked(query):
         say(get_block_message(query))
         return
 
-    # Step 3 — Brain router (coming Week 3)
-    # Will route to: policy_tool, holiday_tool, or expense_tool
     say(f"✅ Got your message: _{query}_\n> Privacy gate: passed\n> Brain: coming in Week 3!")
+
+
+@app.message("")
+def handle_message(message, say):
+    """Handles direct messages to the bot."""
+    raw_query = message.get("text", "")
+    process_query(raw_query, say)
+
+
+@app.event("app_mention")
+def handle_mention(event, say):
+    """Handles @GreenLeaf mentions in channels."""
+    raw_query = event.get("text", "")
+    process_query(raw_query, say)
 
 
 if __name__ == "__main__":
