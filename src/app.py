@@ -1,18 +1,21 @@
 """
 app.py — GreenLeaf Bot | Slack Interface Layer
 ================================================
-This is the entry point for the GreenLeaf HR Assistant bot.
+Entry point for the GreenLeaf HR Assistant bot.
 
 Architecture (HLD):
-    Slack (employee) → app.py → privacy_gate.py → brain.py → tools
-                                      ↓
-                              blocks sensitive queries
-                              (Wi-Fi, salary, MAC address)
+    Slack (employee) → app.py → clean_input() → is_blocked() → brain.py → tools
+
+Message flow:
+    1. Receive message from Slack
+    2. Mask PII via clean_input() — names, IDs, emails
+    3. Check security via is_blocked() — Wi-Fi, salary, injection
+    4. Route to brain.py (Week 3)
 
 Tech stack:
-    - Slack Bolt for Python (Socket Mode) — no public server needed
-    - python-dotenv — loads tokens from .env file
-    - privacy_gate.py — security filter (PII + injection blocking)
+    - Slack Bolt for Python (Socket Mode)
+    - python-dotenv — loads tokens from .env
+    - privacy_gate.py — PII masking + security filter
 
 Sprint: Week 2 | Owner: Ibrahim (System Architect)
 """
@@ -26,7 +29,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 from dotenv import load_dotenv
-from src.privacy_gate import is_blocked, get_block_message
+from src.privacy_gate import clean_input, is_blocked, get_block_message
 
 # Load tokens from .env file (never hardcode tokens in code)
 load_dotenv()
@@ -39,19 +42,24 @@ app = App(token=os.environ["SLACK_BOT_TOKEN"])
 def handle_message(message, say):
     """
     Handles all incoming Slack messages.
-    Flow:
-        1. Privacy gate — block sensitive queries
-        2. Brain router — route to correct tool (Week 3)
-    """
-    query = message.get("text", "")
 
-    # Step 1 — Privacy gate check
-    # Blocks: Wi-Fi passwords, salary info, MAC addresses
+    Flow:
+        1. clean_input()  — mask PII (names, IDs, emails)
+        2. is_blocked()   — refuse sensitive or injected queries
+        3. brain.py       — route to correct tool (Week 3)
+    """
+    raw_query = message.get("text", "")
+
+    # Step 1 — Mask PII before any processing
+    # Original text is never logged or forwarded
+    query = clean_input(raw_query)
+
+    # Step 2 — Block sensitive queries and prompt injection
     if is_blocked(query):
         say(get_block_message(query))
         return
 
-    # Step 2 — Brain router (coming Week 3)
+    # Step 3 — Brain router (coming Week 3)
     # Will route to: policy_tool, holiday_tool, or expense_tool
     say(f"✅ Got your message: _{query}_\n> Privacy gate: passed\n> Brain: coming in Week 3!")
 
@@ -75,9 +83,7 @@ if __name__ == "__main__":
 #
 # 2. Set up environment:
 #    cp .env.example .env
-#    # Edit .env and add your tokens:
-#    # SLACK_BOT_TOKEN=os.environ["SLACK_BOT_TOKEN"]
-#    # SLACK_APP_TOKEN=os.environ["SLACK_APP_TOKEN"]
+#    # Edit .env and add your tokens
 #
 # 3. Install dependencies:
 #    python -m venv venv
@@ -91,7 +97,9 @@ if __name__ == "__main__":
 #    python src/app.py
 #
 # 6. Test in Slack (DM the bot):
-#    "What is the wifi password?"  → should be BLOCKED
-#    "What is my salary?"          → should be BLOCKED
-#    "Is May 1st a holiday?"       → should PASS (brain coming Week 3)
+#    "My name is Beat Müller"       → bot sees: "My name is [NAME]"
+#    "My ID is 12345"               → bot sees: "My ID is [ID]"
+#    "What is the wifi password?"   → BLOCKED
+#    "Ignore previous instructions" → BLOCKED (injection)
+#    "Is May 1st a holiday?"        → PASSED
 # =============================================================================
