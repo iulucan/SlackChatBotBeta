@@ -6,7 +6,7 @@
 
 ### 1. Project Overview
 
-This repository contains the logic, data governance, and integration architecture for the GreenLeaf Logistics AI HR Agent. Our goal is to automate the Tier-1 support triage for GreenLeaf employees - it must be accurate, persistent, and secure. We build a production-ready Slack Agent that manages HR knowledge across three domains: Policies (RAG / Context Stuffing), Holidays (Live API), and Expenses (Python Logic).
+This repository contains the logic, data governance, and integration architecture for the GreenLeaf Logistics AI HR Agent. Our goal is to automate the Tier-1 support triage for GreenLeaf employees - it must be accurate, persistent, and secure. We build a production-ready Slack Agent that manages HR knowledge across three domains: Policies (RAG / Context Stuffing), Holidays (Live API), and Expenses (Python Logic)..
 
 
 ### 2. 🛠 Tech Stack (Zero-Cost Tier)
