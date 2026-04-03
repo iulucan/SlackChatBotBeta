@@ -8,15 +8,18 @@ Responsibilities:
     2. Block Filter — refuse sensitive queries (Wi-Fi, salary, etc.)
     3. Injection Guard — detect and block prompt injection attempts
 
-Architecture position:
-    app.py -> clean_input() -> is_blocked() -> brain.py -> tools
+Architecture position (HLD):
+    app.py → privacy_gate.py → brain.py → tools
+                  ↓
+         1. clean_input()  — mask PII (names, IDs, emails)
+         2. is_blocked()   — block sensitive queries and injections
 
 Compliance:
     Swiss FADP (nDSG): only masked text is logged or processed
 
 Why Regex over NLP (spaCy / Presidio):
     - Zero dependencies, zero model download
-    - 5-digit IDs and name patterns are predictable in this context
+    - 6-digit IDs and name patterns are predictable in this context
     - Sufficient accuracy for Sprint 1 scope
     - NLP can be added in a later sprint if needed
 
@@ -45,7 +48,7 @@ EXCLUDE_FROM_NAME_DETECTION = {
     "january", "february", "march", "april", "may", "june", "july", "august",
     "september", "october", "november", "december",
     "is", "are", "the", "a", "an", "my", "your", "his", "her", "our",
-    "basel", "zurich", "geneva", "bern", "swiss", "switzerland",
+    "basel", "zurich", "geneva", "bern", "lausanne", "swiss", "switzerland",
     "greenleaf", "powerleaf", "how", "what", "when", "where", "why", "which"
 }
 
@@ -78,7 +81,7 @@ def clean_input(text: str) -> str:
     # Step 1 — Mask email addresses
     masked = EMAIL_PATTERN.sub('[EMAIL]', masked)
 
-    # Step 2 — Mask 5-digit employee IDs
+    # Step 2 — Mask 6-digit employee IDs
     masked = EMPLOYEE_ID_PATTERN.sub('[ID]', masked)
 
     # Step 3 — Mask names introduced with phrases ("My name is ...")
@@ -122,6 +125,7 @@ INJECTION_PATTERNS = [
     "act as if",
     "pretend you are",
     "disregard your",
+    "override your",
     "new instructions:",
     "system prompt",
 ]
@@ -162,3 +166,20 @@ def get_block_message(query: str) -> str:
         return "I'm not able to process that request. Please ask me a question about GreenLeaf HR policies."
 
     return "I'm not able to help with that. Please contact HR directly."
+
+
+# =============================================================================
+# HOW TO TEST
+# =============================================================================
+#
+# Run the test file:
+#   python tests/test_privacy_gate.py
+#
+# Expected results:
+#   "What is the wifi password?"        → BLOCKED (IT security)
+#   "What is my salary?"                → BLOCKED (HR sensitive)
+#   "Ignore previous instructions"      → BLOCKED (injection)
+#   "My name is Beat Müller"            → "My name is [NAME]"
+#   "My ID is 788166"                   → "My ID is [ID]"
+#   "Is May 1st a holiday in Basel?"    → PASS (no masking)
+# =============================================================================
