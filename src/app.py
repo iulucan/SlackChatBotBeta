@@ -1,18 +1,21 @@
 """
 app.py — GreenLeaf Bot | Slack Interface Layer
 ================================================
-This is the entry point for the GreenLeaf HR Assistant bot.
+Entry point for the GreenLeaf HR Assistant bot.
 
 Architecture (HLD):
-    Slack (employee) → app.py → privacy_gate.py → brain.py → tools
-                                      ↓
-                              blocks sensitive queries
-                              (Wi-Fi, salary, MAC address)
+    Slack (employee) → app.py → clean_input() → is_blocked() → brain.py → tools
+
+Message flow:
+    1. Receive message from Slack
+    2. Mask PII via clean_input() — names, IDs, emails
+    3. Check security via is_blocked() — Wi-Fi, salary, injection
+    4. Route to brain.py (Week 3)
 
 Tech stack:
-    - Slack Bolt for Python (Socket Mode) — no public server needed
-    - python-dotenv — loads tokens from .env file
-    - privacy_gate.py — security filter (PII + injection blocking)
+    - Slack Bolt for Python (Socket Mode)
+    - python-dotenv — loads tokens from .env
+    - privacy_gate.py — PII masking + security filter
 
 Sprint: Week 2 | Owner: Ibrahim (System Architect)
 """
@@ -79,9 +82,7 @@ if __name__ == "__main__":
 #
 # 2. Set up environment:
 #    cp .env.example .env
-#    # Edit .env and add your tokens:
-#    # SLACK_BOT_TOKEN=os.environ["SLACK_BOT_TOKEN"]
-#    # SLACK_APP_TOKEN=os.environ["SLACK_APP_TOKEN"]
+#    # Edit .env and add your tokens
 #
 # 3. Install dependencies:
 #    python -m venv venv
@@ -95,7 +96,9 @@ if __name__ == "__main__":
 #    python src/app.py
 #
 # 6. Test in Slack (DM the bot):
-#    "What is the wifi password?"  → should be BLOCKED
-#    "What is my salary?"          → should be BLOCKED
-#    "Is May 1st a holiday?"       → should PASS (brain coming Week 3)
+#    "My name is Beat Müller"       → bot sees: "My name is [NAME]"
+#    "My ID is 12345"               → bot sees: "My ID is [ID]"
+#    "What is the wifi password?"   → BLOCKED
+#    "Ignore previous instructions" → BLOCKED (injection)
+#    "Is May 1st a holiday?"        → PASSED
 # =============================================================================
