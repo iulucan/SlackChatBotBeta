@@ -29,8 +29,8 @@ import re
 # PII MASKING
 # ---------------------------------------------------------------------------
 
-# Matches GreenLeaf employee IDs: exactly 5 consecutive digits
-EMPLOYEE_ID_PATTERN = re.compile(r'\b\d{5}\b')
+# Matches GreenLeaf employee IDs: exactly 6 consecutive digits
+EMPLOYEE_ID_PATTERN = re.compile(r'\b\d{6}\b')
 
 # Matches names introduced with common phrases
 # Example: "My name is Beat Müller" -> "My name is [NAME]"
