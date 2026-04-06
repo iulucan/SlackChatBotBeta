@@ -31,6 +31,7 @@ from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 from dotenv import load_dotenv
 from src.privacy_gate import clean_input, is_blocked, get_block_message
+from src.brain import respond # Addition by Aleksei for US-07
 
 # Load tokens from .env file (never hardcode tokens in code)
 load_dotenv()
@@ -61,8 +62,18 @@ def process_query(raw_query, say):
     # ===== STEP 2: PII MASKING (Only for safe queries) =====
     query = clean_input(raw_query)
 
-    # ===== STEP 3: PROCESSING (Brain goes here in Week 3) =====
-    say(f"✅ Got your message: _{query}_\n> Privacy gate: passed\n> Brain: coming in Week 3!")
+    if is_blocked(query):
+        say(get_block_message(query))
+        return
+    
+    result, tool_used = respond(query) # Addition by Aleksei for US-07
+
+    if "error" in result: # Addition by Aleksei for US-07
+        say("Sorry, I could not find an answer. Please contact HR directly.") # Addition by Aleksei for US-07
+        return # Addition by Aleksei for US-07
+
+    # say(f"✅ Got your message: _{query}_\n> Privacy gate: passed\n> Brain: coming in Week 3!") # Removed by Aleksei, instead is line below
+    say(f"{result['answer']}\n\n_Source: {result['source']}_") # Addition by Aleksei for US-07
 
 
 @app.message("")

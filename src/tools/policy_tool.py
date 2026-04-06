@@ -36,7 +36,7 @@ from chromadb.utils import embedding_functions
 HANDBOOK_PATH = os.path.join("data", "handbook.md")
 VECTOR_STORE_PATH = os.path.join("vector_store")
 COLLECTION_NAME = "handbook"
-MAX_RESULTS = 3  # number of chunks to retrieve per query
+MAX_RESULTS = 1  # number of chunks to retrieve per query
 
 
 # ─────────────────────────────────────────────
@@ -187,18 +187,12 @@ def query_handbook(text: str) -> dict:
                 "error": "No relevant information found in the handbook."
             }
 
-        # Combine top results into one answer
-        answer_parts = []
-        sources = []
+        # Return only the most relevant chunk — top result only
+        best_doc = documents[0]
+        best_source = metadatas[0].get("source", "GreenLeaf Handbook")
 
-        for doc, meta in zip(documents, metadatas):
-            answer_parts.append(doc)
-            source = meta.get("source", "Handbook")
-            if source not in sources:
-                sources.append(source)
-
-        answer = "\n\n".join(answer_parts)
-        source = "Handbook — " + ", ".join(sources)
+        answer = best_doc
+        source = "GreenLeaf Handbook — " + best_source
 
         return {
             "answer": answer,
