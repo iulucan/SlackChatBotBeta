@@ -25,8 +25,8 @@ def test(description, result, expected):
 
 # --- PII Masking ---
 print("-- PII Masking --")
-test("Mask employee ID (5 digits)",
-    clean_input("My ID is 12345"),
+test("Mask employee ID (6 digits)",
+    clean_input("My ID is 788166"),
     "My ID is [ID]")
 
 test("Mask name after 'My name is'",
