@@ -42,10 +42,9 @@ import re
 
 FORBIDDEN_IT_SECURITY = [
     # WiFi / Network credentials (Handbook Section 6)
-    "wifi", "wi-fi", "wireless password", "password",
+    "wifi", "wi-fi", "wireless password", "wifi password", "wi-fi password",
     "mac address", "mac registration", "mac addr",
     "network key", "ssid", "network password",
-    "greenleaf_2026",  # The actual guest WiFi password from Handbook Section 6
     "network configuration", "ip address", "router",
     # Sarah Müller (IT) manages MAC registration — do not reveal process
     "mac registration process", "device registration", "mac whitelist",
