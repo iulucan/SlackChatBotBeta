@@ -26,7 +26,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import google.generativeai as genai
 from dotenv import load_dotenv
-from src.tools.policy_tool import query_handbook
+# We switch to Hooman's module because Issue #42/#43 requires:
+# - loading/indexing the whole data/ folder
+# - using only provided text
+# - redirecting sensitive wellbeing matters to the ombudsman
+from src.tools.policy_wellbeing import query_handbook
 from src.tools.expense_tool import validate_expense
 
 # Load API key from .env
