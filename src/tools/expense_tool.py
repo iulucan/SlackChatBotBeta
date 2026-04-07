@@ -18,6 +18,7 @@ This module returns Slack-ready strings for the interface layer.
 """
 
 import os
+import re
 from google import genai
 from dotenv import load_dotenv
 
@@ -170,72 +171,91 @@ def answer_expense_policy(text):
         "and receipt submission via ScanPro."
     )
 
+def extract_amount(text: str) -> float:
+    """
+    Extract amount from expense text.
 
-def validate_expense(text, amount):
+    Supported examples:
+    - 20 CHF
+    - 20 chf
+    - 20 francs
+    - 20 fr.
+    """
+    match = re.search(
+        r"(\d+(?:\.\d+)?)\s*(?:chf|francs?|fr\.?)",
+        text,
+        re.IGNORECASE
+    )
+    return float(match.group(1)) if match else 0.0
+
+def validate_expense(text: str) -> dict:
     """
     Main entry point for expense validation.
 
-    Validation logic:
-    1. Check alcohol deterministically via keyword list
-    2. If not found, run AI alcohol audit as backup
-    3. Check whether an external business contact is present
-    4. Check amount limit
-    5. Return approval or rejection with reasons
-
-    Args:
-        text (str): original user query
-        amount (float): extracted CHF amount
+    Flow:
+    1. Extract amount from text
+    2. Detect alcohol (keyword → AI fallback)
+    3. Check client presence
+    4. Apply handbook rules
+    5. Return structured response
 
     Returns:
-        str: formatted response ready for Slack
+        dict: {"answer": str, "source": str}
     """
+
     text_lower = text.lower()
 
-    # Step 1: deterministic alcohol detection
+    # Step 1 — extract amount
+    amount = extract_amount(text)
+
+    # Step 2 — alcohol detection
     keyword_alcohol = contains_alcohol_keywords(text)
 
-    # Step 2: AI alcohol detection only if keyword detector found nothing
-    # This avoids unnecessary AI calls and makes brand detection more reliable.
     ai_alcohol = False
     if not keyword_alcohol:
         ai_alcohol = check_alcohol_with_ai(text)
 
-    # Step 3: combine both alcohol signals
-    # If keyword_alcohol is True, we already know the answer deterministically.
     has_alcohol = keyword_alcohol or (ai_alcohol is True)
 
-    # Step 4: check whether the expense includes an external business contact
+    # Step 3 — client detection
     has_client = any(keyword in text_lower for keyword in CLIENT_KEYWORDS)
 
-    # Step 5: collect rejection reasons
+    # Step 4 — apply rules
     reasons = []
 
-    # Handbook rule: maximum 35 CHF per person
+    # Rule: max 35 CHF
     if amount > 35:
         reasons.append("Amount is above the 35 CHF limit")
 
-    # Handbook rule: alcohol is never reimbursable
+    if amount == 0.0:
+        return {
+            "answer": "❌ Rejected:\n• Could not detect the expense amount in CHF\n\nPlease include the amount, for example: 'Lunch with a client for 20 CHF'.",
+            "source": "expense_tool"
+        }
+
+    # Rule: alcohol forbidden
     if has_alcohol:
         if keyword_alcohol:
             reasons.append("Receipt contains alcohol or a known alcohol brand")
         else:
             reasons.append("Receipt contains alcohol (detected by AI audit)")
     elif ai_alcohol is None:
-        # Important fail-safe:
-        # if deterministic detection found nothing and AI failed,
-        # we reject safely instead of approving without a valid alcohol audit.
         reasons.append("Alcohol audit service unavailable — cannot safely approve expense")
 
-    # Handbook rule: must involve an external client / equivalent business contact
+    # Rule: must include client
     if not has_client:
         reasons.append("Expenses must be associated with a client or guest")
 
-    # Final decision
+    # Step 5 — decision
     if not reasons:
-        return "✅ Approved! Please use our exclusive scanning app as stated in the handbook."
+        return {
+    "answer": "✅ Approved! Please use our exclusive scanning app as stated in the handbook.",
+    "source": "GreenLeaf Handbook — Expense Policy"
+    }
 
     reason_str = "\n• ".join(reasons)
-    return (
-        f"❌ Rejected:\n• {reason_str}\n\n"
-        "Note: Please use our exclusive scanning app as stated in the handbook."
-    )
+
+    return {
+    "answer": f"❌ Rejected:\n• {reason_str}\n\nNote: Please use our exclusive scanning app as stated in the handbook.",
+    "source": "GreenLeaf Handbook — Expense Policy"
+    }

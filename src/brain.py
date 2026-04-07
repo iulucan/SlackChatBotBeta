@@ -27,6 +27,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import google.generativeai as genai
 from dotenv import load_dotenv
 from src.tools.policy_tool import query_handbook
+from src.tools.expense_tool import validate_expense
 
 # Load API key from .env
 load_dotenv()
@@ -124,11 +125,7 @@ def dispatch(intent: str, text: str) -> dict:
         }
 
     elif intent == "expense":
-        # expense_tool.py coming
-        return {
-            "answer": "Expense validation is coming. For now please contact Beat Müller directly.",
-            "source": "GreenLeaf Bot — feature in development"
-        }
+        return validate_expense(text)
 
     else:
         return {

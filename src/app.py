@@ -62,11 +62,13 @@ def process_query(raw_query, say):
     # ===== STEP 2: PII MASKING (Only for safe queries) =====
     query = clean_input(raw_query)
 
+    query = clean_input(raw_query)
+
     if is_blocked(query):
         say(get_block_message(query))
         return
-    
-    result, tool_used = respond(query) # Addition by Aleksei for US-07
+
+    result, tool_used = respond(raw_query)
 
     if "error" in result: # Addition by Aleksei for US-07
         say("Sorry, I could not find an answer. Please contact HR directly.") # Addition by Aleksei for US-07
