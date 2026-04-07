@@ -35,9 +35,9 @@ class TestSwissHolidayChecker(unittest.TestCase):
         # Assert that it is flagged as a nationwide holiday
         self.assertTrue(holiday_info.nationwide, "Swiss National Day should be nationwide")
 
-    def test_negative_output_random_date(self):
+    def test_negative_output_federal_fast_monday_in_BS(self):
         """
-        Example 2: Check a date that is NOT a public holiday to verify negative output.
+        Example 2: Check that Federal Fast Monday is NOT a public holiday in BS to verify negative output.
         Monday, September 21st, 2026 (Lundi du Jeûne) is a public holiday in Vaud (VD),
         but it is NOT a public holiday in Basel (BS). Therefore, checking Sept 21st
         for BS should return False.
