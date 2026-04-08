@@ -98,37 +98,153 @@ Do not explain. Do not add punctuation. Just one word.
         print(f"[BRAIN ERROR] Classification failed: {e} — defaulting to policy")
         return "policy"
 
+# ─────────────────────────────────────────────
+# POLICY TYPE CLASSIFICATION
+# ─────────────────────────────────────────────
+
+def classify_policy_type(text: str) -> str:
+    try:
+        prompt = f"""
+You are an HR assistant for GreenLeaf Logistics.
+An employee asked: "{text}"
+
+GreenLeaf handbook clearly defines:
+- Working hours and attendance
+- Time off and vacation
+- Bereavement and special leave
+- Fire safety and emergency procedures
+- Expense claims
+
+NOT in handbook — requires empathetic guidance:
+- Harassment and bullying
+- Psychological wellbeing
+- Mental health and stress
+- Workplace conflict and misconduct
+
+Which category?
+Reply with only: policy_handbook or policy_wellbeing
+"""
+        response = model.generate_content(prompt)
+        result = response.text.strip().lower()
+        if result not in ["policy_handbook", "policy_wellbeing"]:
+            return "policy_handbook"
+        print(f"[BRAIN] Policy type: {result}")
+        return result
+    except Exception as e:
+        print(f"[BRAIN ERROR] Policy type failed: {e} — defaulting to policy_handbook")
+        return "policy_handbook"
+
+
+# ─────────────────────────────────────────────
+# ROLE CLARIFICATION CHECK
+# ─────────────────────────────────────────────
+
+def needs_role_clarification(text: str) -> bool:
+    try:
+        prompt = f"""
+You are an HR assistant for GreenLeaf Logistics.
+An employee asked: "{text}"
+
+GreenLeaf has DIFFERENT working hour rules for EACH role:
+- Warehouse staff: must be onsite by 07:00
+- Customer support: operates on shift rotation schedule
+- General office staff: core hours 08:30 to 17:30
+
+If the question is about working hours, start time, office hours,
+arrival time, when to come in, opening hours, or attendance schedule
+— the answer DEPENDS on which role the employee has.
+
+Does this question ask about working hours, arrival time,
+or when to be at work?
+Reply with only YES or NO.
+"""
+        response = model.generate_content(prompt)
+        result = response.text.strip().upper()
+        print(f"[BRAIN] Needs role clarification: {result}")
+        return "YES" in result
+    except Exception as e:
+        print(f"[BRAIN ERROR] {e} — skipping clarification")
+        return False
+
+
+# ─────────────────────────────────────────────
+# ROLE FILTER
+# ─────────────────────────────────────────────
+
+def filter_by_role(question: str, handbook_text: str) -> str:
+    try:
+        prompt = f"""
+You are an HR assistant for GreenLeaf Logistics.
+The employee asked: "{question}"
+
+Handbook section:
+{handbook_text}
+
+Extract ONLY the information relevant to this employee's role.
+Be concise. Do not include rules for other roles.
+Do not add information not in the handbook.
+"""
+        response = model.generate_content(prompt)
+        return response.text.strip()
+    except Exception as e:
+        print(f"[BRAIN ERROR] {e} — returning full answer")
+        return handbook_text
+
+
 
 # ─────────────────────────────────────────────
 # TOOL DISPATCH
 # ─────────────────────────────────────────────
 
 def dispatch(intent: str, text: str) -> dict:
-    """
-    Calls the correct tool based on the classified intent.
 
-    Interface contract (do not change):
-        Input:  intent: str, text: str
-        Output: {"answer": str, "source": str} or {"error": str}
-
-    Args:
-        intent: classified intent — "policy", "holiday", "expense"
-        text:   the employee's sanitised question
-
-    Returns:
-        dict with answer and source, or error message
-    """
     if intent == "policy":
-        return query_handbook(text)
+        policy_type = classify_policy_type(text)
+
+        if policy_type == "policy_wellbeing":
+            from src.tools.policy_wellbeing import query_handbook as query_policy_wellbeing
+            return query_policy_wellbeing(text)
+
+        from src.tools.policy_handbook import query_handbook as query_policy_handbook
+
+        if needs_role_clarification(text):
+            text_lower = text.lower()
+            known_roles = [
+                "warehouse staff", "warehouse worker", "warehouse",
+                "customer support", "support team",
+                "office staff", "office worker", "general staff"
+            ]
+            if any(role in text_lower for role in known_roles):
+                handbook_result = query_policy_handbook(text)
+                if "error" in handbook_result:
+                    return handbook_result
+                focused = filter_by_role(text, handbook_result["answer"])
+                return {
+                    "answer": focused,
+                    "source": handbook_result["source"]
+                }
+            else:
+                return {
+                    "needs_clarification": True,
+                    "original_english": text,
+                    "question": (
+                        "To give you the correct answer — which role are you?\n"
+                        "• Warehouse staff\n"
+                        "• Customer support\n"
+                        "• General office staff"
+                    )
+                }
+
+        return query_policy_handbook(text)
 
     elif intent == "holiday":
-        # holiday_tool.py coming
         return {
             "answer": "Holiday checking is coming. For now please check the Basel-Stadt cantonal calendar.",
             "source": "GreenLeaf Bot — feature in development"
         }
 
     elif intent == "expense":
+        from src.tools.expense_tool import validate_expense
         return validate_expense(text)
 
     else:

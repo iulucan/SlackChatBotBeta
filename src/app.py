@@ -39,43 +39,67 @@ load_dotenv()
 # Initialize Slack app with bot token
 app = App(token=os.environ["SLACK_BOT_TOKEN"])
 
-
-def process_query(raw_query, say):
+conversation_state = {}
+def process_query(raw_query, say, user_id):
     """
     Shared logic for DM messages and channel mentions.
-    
-    ⚠️  US-03 HARDENING: Check is_blocked() FIRST
-    This prevents wasting resources on masking if we're going to refuse anyway.
-    More importantly, it prevents any accidental leaks of blocked information.
-    
-    Args:
-        raw_query: The raw user message from Slack
-        say: Function to send reply back to Slack
+ 
+    Flow:
+        1. Security check on raw text first (US-03)
+        2. PII masking
+        3. Conversation state — handle follow-up answers
+        4. Brain router
+        5. Reply to employee
     """
-    # ===== STEP 1: SECURITY CHECK (US-03) =====
-    # Do this BEFORE masking PII so we catch attacks early
+    # Step 1 — security check on raw text first
     if is_blocked(raw_query):
-        block_message = get_block_message(raw_query)
-        say(block_message)
+        say(get_block_message(raw_query))
         return
-    
-    # ===== STEP 2: PII MASKING (Only for safe queries) =====
+ 
+    # Step 2 — PII masking
     query = clean_input(raw_query)
-
-    query = clean_input(raw_query)
-
-    if is_blocked(query):
-        say(get_block_message(query))
+ 
+    # Step 3 — check if waiting for follow-up from this user
+    if user_id in conversation_state:
+        pending = conversation_state.pop(user_id)
+        # Translate follow-up to English and call dispatch directly
+        # bypassing respond() to avoid re-classification loop
+        from src.brain import detect_language, translate_text, dispatch
+        follow_up_lang = detect_language(raw_query)
+        follow_up_english = translate_text(raw_query, "en", follow_up_lang)
+        combined = f"{pending} My role is: {follow_up_english}"
+ 
+        result = dispatch("policy", combined)
+ 
+        if "answer" in result:
+            result["answer"] = translate_text(result["answer"], follow_up_lang, "en")
+ 
+        if "error" in result:
+            say("Sorry, I could not find an answer. Please contact HR directly.")
+            return
+ 
+        say(f"{result['answer']}\n\n_Source: {result['source']}_")
         return
-
-    result, tool_used = respond(raw_query)
-
-    if "error" in result: # Addition by Aleksei for US-07
-        say("Sorry, I could not find an answer. Please contact HR directly.") # Addition by Aleksei for US-07
-        return # Addition by Aleksei for US-07
-
-    # say(f"✅ Got your message: _{query}_\n> Privacy gate: passed\n> Brain: coming in Week 3!") # Removed by Aleksei, instead is line below
-    say(f"{result['answer']}\n\n_Source: {result['source']}_") # Addition by Aleksei for US-07
+ 
+    # Step 4 — brain router
+    result, tool_used = respond(query)
+ 
+    # Step 5 — handle clarification request
+    if result.get("needs_clarification"):
+        conversation_state[user_id] = result.get("original_english", raw_query)
+        from src.brain import detect_language, translate_text
+        user_lang = detect_language(raw_query)
+        translated_question = translate_text(result["question"], user_lang, "en")
+        say(translated_question)
+        return
+ 
+    # Step 6 — handle error
+    if "error" in result:
+        say("Sorry, I could not find an answer. Please contact HR directly.")
+        return
+ 
+    # Step 7 — send answer
+    say(f"{result['answer']}\n\n_Source: {result['source']}_")
 
 
 @app.message("")
@@ -86,18 +110,19 @@ def handle_message(message, say):
     Triggered when someone sends a DM to @GreenLeaf.
     """
     raw_query = message.get("text", "")
-    process_query(raw_query, say)
+    user_id = message.get("user", "unknown")
+    process_query(raw_query, say, user_id)
 
 
 @app.event("app_mention")
 def handle_mention(event, say):
     """
     Handles @GreenLeaf mentions in channels.
-    
     Triggered when someone mentions @GreenLeaf in a public/private channel.
     """
     raw_query = event.get("text", "")
-    process_query(raw_query, say)
+    user_id = event.get("user", "unknown")
+    process_query(raw_query, say, user_id)
 
 
 if __name__ == "__main__":
