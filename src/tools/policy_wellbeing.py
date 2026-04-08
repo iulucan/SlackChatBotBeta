@@ -53,6 +53,15 @@ SENSITIVE_KEYWORDS = [
     "discrimination",
     "sexual harassment",
     "hostile workplace",
+    "conflict"
+    "misconduct"
+    "harass"
+    "I'm being bullied"
+    "someone is harassing me"
+    "unsafe workplace"
+    "peer dispute"
+    "disagreement"
+    "argument"
 ]
 
 OMBUDSMAN_EMAIL = "ombudsman@greenleaf-safety.ch"
