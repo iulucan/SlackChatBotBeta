@@ -175,7 +175,8 @@ def query_handbook(text: str) -> dict:
         # Search ChromaDB
         results = collection.query(
             query_texts=[text],
-            n_results=min(MAX_RESULTS, collection.count())
+            n_results=min(MAX_RESULTS, collection.count()),
+            include=["documents", "metadatas"]
         )
 
         # Extract results
@@ -187,7 +188,7 @@ def query_handbook(text: str) -> dict:
                 "error": "No relevant information found in the handbook."
             }
 
-        # Return only the most relevant chunk — top result only
+        # Return the most relevant chunk
         best_doc = documents[0]
         best_source = metadatas[0].get("source", "GreenLeaf Handbook")
 
