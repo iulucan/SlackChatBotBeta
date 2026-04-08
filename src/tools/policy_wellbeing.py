@@ -224,7 +224,7 @@ STRICT RULES:
    "I could not find this information in the provided GreenLeaf documents."
 5. If the question is about harassment, bullying, whistleblowing, or serious misconduct,
    do NOT answer the substance. Instead say:
-   "For harassment, bullying, whistleblowing, or serious misconduct, please contact the confidential ombudsman at ombudsman@greenleaf-safety.ch."
+   "For peers disputes or conflicts, employees should first attempt a 'Coffee Chat' to resolve the issue. If the matter involves serious misconduct, harassment, bullying, or whistleblowing, please contact the confidential ombudsman at ombudsman@greenleaf-safety.ch."
 6. Keep the answer clear and professional.
 
 QUESTION:
