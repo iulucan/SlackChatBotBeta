@@ -145,6 +145,7 @@ def respond(text: str) -> tuple:
     """
     Main function called by app.py.
     Classifies intent and dispatches to correct tool.
+    Detect the user's language and respond in the SAME language.
 
     Interface contract (do not change):
         Input:  text: str — sanitised employee question
@@ -157,21 +158,132 @@ def respond(text: str) -> tuple:
         tuple: (result dict, tool_used str)
     """
     try:
-        # Step 1 — classify intent
-        intent = classify_intent(text)
+        # Step 1: Detect language
+        user_lang = detect_language(text)
 
-        # Step 2 — dispatch to correct tool
-        result = dispatch(intent, text)
+        # Step 2: Convert text to English
+        textInEnglish = translate_text(text, "en", user_lang)
+        print("step 2 done")
+
+        # Step 3: Classify intent
+        intent = classify_intent(textInEnglish)
+        print("step 3 done")
+
+        # Step 4: Dispatch — pass language so tools can respond correctly
+        result = dispatch(intent, textInEnglish)
+        print("step 4 done")
+        
+        # Step 5: Convert answer back to user's language if needed
+        resultInUserLang = translate_text(result.get("answer"), user_lang, "en")
+        result["answer"] = resultInUserLang
+        print("step 5 done")
 
         tool_used = f"{intent}_tool"
         return result, tool_used
 
     except Exception as e:
-        print(f"[BRAIN ERROR] respond() failed: {e}")
+        error_message = "Something went wrong. Please contact HR directly."
+        error_messageInUserLang = translate_text(error_message, user_lang, "en")
         return {
-            "error": "Something went wrong. Please contact HR directly."
+            "error": error_messageInUserLang
         }, "unknown"
+    
 
+def detect_language(text: str) -> str:
+    """
+    Detects the language of the user's message.
+    Returns ISO 639-1 code: 'en', 'de', 'fr', 'it', etc.
+    """
+    prompt = f"""
+You are a highly accurate language detector.
+Analyze the following text and reply with **only** the ISO 639-1 language code (two letters).
+
+Examples:
+- "Hello, how are you?" → en
+- "Wann muss ich im Büro sein?" → de
+- "Quelle est la politique de congés ?" → fr
+- "Quando è il prossimo giorno festivo a Basilea?" → it
+
+Text: "{text}"
+
+Reply with exactly two lowercase letters, nothing else.
+"""
+
+    try:
+        response = model.generate_content(prompt)
+        lang = response.text.strip().lower()[:2]
+
+        # Safety fallback
+        if lang not in ("en", "de", "fr", "it"):
+            lang = "en"
+
+        print(f"[BRAIN] Language detected: {lang}")
+        return lang
+
+    except Exception as e:
+        print(f"[BRAIN] Language detection failed: {e} — defaulting to en")
+        return "en"
+    
+
+def translate_text(text: str, target_lang: str, source_lang: str = None) -> str:
+    """
+    Translates text to the target language using Gemini.
+    
+    Args:
+        text: The text to translate
+        target_lang: Target language ISO 639-1 code (e.g., 'de', 'fr', 'it', 'en')
+        source_lang: Optional source language code. If None, Gemini will auto-detect.
+
+    Returns:
+        Translated text in the target language
+    """
+    if not text or not text.strip():
+        return text
+
+    # No translation needed if target is same as source
+    if source_lang and source_lang.lower() == target_lang.lower():
+        return text.strip()
+
+    try:
+        # Build clear and effective prompt
+        lang_names = {
+            "en": "English",
+            "de": "German",
+            "fr": "French",
+            "it": "Italian",
+            "es": "Spanish",
+            "ru": "Russian"
+        }
+
+        target_name = lang_names.get(target_lang.lower(), target_lang)
+        source_info = f" from {lang_names.get(source_lang.lower(), 'the original language')}" if source_lang else ""
+
+        prompt = f"""
+You are a professional, accurate translator for an HR bot at GreenLeaf Logistics in Basel.
+
+Translate the following text into **{target_name}**{source_info}.
+- Keep the tone professional and friendly.
+- Preserve meaning exactly.
+- Do not add any explanations or extra text.
+- Do not use markdown unless the original has it.
+- If the text is already in {target_name}, return it unchanged.
+
+Text to translate:
+\"\"\"{text}\"\"\"
+
+Reply with **only** the translated text. Nothing else.
+"""
+
+        response = model.generate_content(prompt)
+        translated = response.text.strip()
+
+        print(f"[BRAIN] Translated from {source_lang or 'auto'} → {target_lang}: {len(text)} → {len(translated)} chars")
+        return translated
+
+    except Exception as e:
+        print(f"[BRAIN ERROR] Translation failed ({source_lang} → {target_lang}): {e}")
+        # Fallback: return original text so the bot doesn't break
+        return text
 
 # =============================================================================
 # HOW TO TEST
