@@ -58,6 +58,12 @@ def process_query(raw_query, say, user_id):
  
     # Step 2 — PII masking
     query = clean_input(raw_query)
+    # Optional second safety check on masked text
+    # This protects against any risky content that may still remain after masking
+    if is_blocked(query):
+        say(get_block_message(query))
+        return
+ 
  
     # Step 3 — check if waiting for follow-up from this user
     if user_id in conversation_state:
