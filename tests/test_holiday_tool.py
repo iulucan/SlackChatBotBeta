@@ -4,10 +4,15 @@ test_holiday_tool.py
 Unit tests for the SwissHolidayChecker module.
 Run this file directly using: python -m unittest test_holiday_tool.py
 """
-
+import sys
+import os
 import unittest
 from datetime import date
-from holiday_tool import SwissHolidayChecker
+
+# Ensure the src directory is in the path for imports
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
+from src.tools.holiday_tool import SwissHolidayChecker
 
 
 class TestSwissHolidayChecker(unittest.TestCase):

@@ -118,7 +118,7 @@ if __name__ == "__main__":
 #    - Install to Workspace → copy Bot Token (os.environ["SLACK_BOT_TOKEN"]...)
 #
 # 2. Set up environment:
-#    cp .env.example .env
+#    cp .env
 #    # Edit .env and add your tokens
 #
 # 3. Install dependencies:
