@@ -32,7 +32,8 @@ from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 from dotenv import load_dotenv
 from src.privacy_gate import clean_input, is_blocked, get_block_message
-from src.brain import respond, detect_language, translate_text, dispatch
+from src.brain import respond, detect_language, translate_text, filter_by_role, validate_role
+from src.tools.policy_handbook import query_handbook as query_policy_handbook
 
 # Load tokens from .env file (never hardcode tokens in code)
 load_dotenv()
@@ -74,17 +75,33 @@ def process_query(raw_query, say, user_id):
         follow_up_lang = detect_language(query)
         follow_up_english = translate_text(query, "en", follow_up_lang)
         combined = f"{pending} My role is: {follow_up_english}"
- 
-        result = dispatch("policy", combined)
- 
-        if "answer" in result:
-            result["answer"] = translate_text(result["answer"], follow_up_lang, "en")
 
-        if "error" in result or "needs_clarification" in result:
-            say("Sorry, I could not find an answer. Please contact HR directly.")
+        # Validate role before proceeding — ask to rephrase if unclear
+        if not validate_role(follow_up_english):
+            conversation_state[user_id] = pending
+            retry_msg = translate_text(
+                "I didn't catch that — could you rephrase? Please reply with one of:\n• Warehouse staff\n• Customer support\n• General office staff",
+                follow_up_lang, "en"
+            )
+            say(retry_msg)
             return
 
-        say(f"{result['answer']}\n\n_Source: {result['source']}_")
+        # We already know this is a working hours question — skip dispatch/clarification loop
+        # and go straight to handbook + role filter
+        handbook_result = query_policy_handbook(combined)
+
+        if "error" in handbook_result:
+            conversation_state[user_id] = pending
+            retry_msg = translate_text(
+                "I didn't catch that — could you rephrase? Please reply with one of:\n• Warehouse staff\n• Customer support\n• General office staff",
+                follow_up_lang, "en"
+            )
+            say(retry_msg)
+            return
+
+        answer = filter_by_role(combined, handbook_result["answer"])
+        answer = translate_text(answer, follow_up_lang, "en")
+        say(f"{answer}\n\n_Source: {handbook_result['source']}_")
         return
  
     # Step 4 — brain router

@@ -27,9 +27,13 @@ GreenLeaf operates on a trust-based flextime model.
 * **Request Process:** Requests must be submitted via the HR portal at least 3 weeks in advance. Final approval is managed by the Head of Operations.
 
 ## 5. Bereavement & Special Leave
+In times of personal tragedy, GreenLeaf stands by its family.
+
 * **Immediate Family:** 3 days of paid leave (spouse, child, or parent).
 * **Close Relatives:** 1 day of paid leave (grandparents or siblings).
 * **Extended Requests:** Any request exceeding 3 days requires a personal meeting and written approval from the CEO.
+
+For any other type of special leave, contact your HR manager.
 
 ## 6. IT & Security
 * **Passwords:** Must be changed every 90 days. Sharing or writing down passwords is strictly prohibited.

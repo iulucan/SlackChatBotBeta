@@ -54,13 +54,6 @@ HANDBOOK_KEYWORDS = [
     "fire safety", "emergency procedure",
 ]
 
-# Subset of HANDBOOK_KEYWORDS that indicate a working-hours question.
-# Only these trigger needs_role_clarification() — saves one Gemini call for all other policy topics.
-HOURS_KEYWORDS = [
-    "working hours", "office hours", "start time", "attendance",
-    "arrive", "arrival", "what time", "shift", "onsite", "on-site",
-    "in the office", "come in", "be in",
-]
 
 WELLBEING_KEYWORDS = [
     "harass", "bully", "bullying", "stress", "burnout", "mental health",
@@ -199,6 +192,74 @@ Reply with only YES or NO.
 
 
 # ─────────────────────────────────────────────
+# EMERGENCY TYPE CLASSIFICATION
+# ─────────────────────────────────────────────
+
+def classify_emergency_type(text: str) -> str:
+    """
+    Called only when "emergency" is detected in the text.
+    Classifies whether it is a family/personal emergency (→ bereavement/leave section)
+    or a physical/safety emergency (→ fire safety section).
+
+    Returns: "bereavement" | "safety" | "other"
+    """
+    try:
+        prompt = f"""
+You are an HR assistant for GreenLeaf Logistics.
+An employee said: "{text}"
+
+Classify this as exactly one of:
+- bereavement: the employee has a family emergency, personal emergency,
+  urgent family situation, sick relative, death in the family, or needs emergency leave
+- safety: the employee is asking about fire alarms, evacuation, assembly point,
+  fire wardens, or physical building safety procedures
+- other: anything else
+
+Reply with only one word: bereavement, safety, or other.
+"""
+        response = model.generate_content(prompt)
+        result = response.text.strip().lower()
+        if result not in ["bereavement", "safety", "other"]:
+            return "other"
+        print(f"[BRAIN] Emergency type: {result}")
+        return result
+    except Exception as e:
+        print(f"[BRAIN ERROR] Emergency classification failed: {e} — defaulting to other")
+        return "other"
+
+
+# ─────────────────────────────────────────────
+# ROLE VALIDATION
+# ─────────────────────────────────────────────
+
+def validate_role(text: str) -> bool:
+    """
+    Returns True if the text clearly identifies one of the three GreenLeaf roles.
+    Used to validate follow-up replies before passing to filter_by_role.
+    """
+    try:
+        prompt = f"""
+You are an HR assistant for GreenLeaf Logistics.
+The employee replied: "{text}"
+
+GreenLeaf has exactly three roles:
+- Warehouse staff (also: warehouse, warehose, warehouss, warehouse worker, etc.)
+- Customer support (also: customer service, support team, support agent, etc.)
+- General office staff (also: office, office worker, general staff, etc.)
+
+Does this reply clearly identify one of these three roles, even with spelling mistakes?
+Reply with only YES or NO.
+"""
+        response = model.generate_content(prompt)
+        result = response.text.strip().upper()
+        print(f"[BRAIN] Role validated: {result}")
+        return "YES" in result
+    except Exception as e:
+        print(f"[BRAIN ERROR] Role validation failed: {e}")
+        return False
+
+
+# ─────────────────────────────────────────────
 # ROLE FILTER
 # ─────────────────────────────────────────────
 
@@ -212,7 +273,8 @@ Handbook section:
 {handbook_text}
 
 Extract the information relevant to this employee's role.
-- If specific hours or details are listed, state them clearly.
+- Always include universal rules that apply to ALL roles (e.g. mandatory 45-minute lunch break).
+- If specific hours or details are listed for their role, state them clearly.
 - If the handbook gives partial information (e.g. "refer to IT schedules" or "shift rotation"),
   include that and tell the employee where to get the full details.
 - Be concise. Do not include rules for other roles.
@@ -245,33 +307,26 @@ def dispatch(intent: str, text: str) -> dict:
         if policy_type == "policy_wellbeing":
             return query_policy_wellbeing(text)
 
-        if any(kw in text_lower_check for kw in HOURS_KEYWORDS) and needs_role_clarification(text):
-            text_lower = text.lower()
-            known_roles = [
-                "warehouse staff", "warehouse worker", "warehouse",
-                "customer support", "support team",
-                "office staff", "office worker", "general staff"
-            ]
-            if any(role in text_lower for role in known_roles):
-                handbook_result = query_policy_handbook(text)
-                if "error" in handbook_result:
-                    return handbook_result
-                focused = filter_by_role(text, handbook_result["answer"])
-                return {
-                    "answer": focused,
-                    "source": handbook_result["source"]
-                }
-            else:
-                return {
-                    "needs_clarification": True,
-                    "original_english": text,
-                    "question": (
-                        "To give you the correct answer — which role are you?\n"
-                        "• Warehouse staff\n"
-                        "• Customer support\n"
-                        "• General office staff"
-                    )
-                }
+        # Emergency pre-check — always run, no keyword trigger
+        # Gemini classifies every policy question; returns "other" for non-emergency queries
+        emergency_type = classify_emergency_type(text)
+        if emergency_type == "bereavement":
+            return query_policy_handbook("bereavement special leave personal tragedy")
+        elif emergency_type == "safety":
+            return query_policy_handbook("fire safety emergency procedure")
+        # "other" falls through to normal flow
+
+        if needs_role_clarification(text):
+            return {
+                "needs_clarification": True,
+                "original_english": text,
+                "question": (
+                    "To give you the correct answer — which role are you?\n"
+                    "• Warehouse staff\n"
+                    "• Customer support\n"
+                    "• General office staff"
+                )
+            }
 
         return query_policy_handbook(text)
 
