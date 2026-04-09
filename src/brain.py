@@ -30,7 +30,8 @@ from dotenv import load_dotenv
 # - loading/indexing the whole data/ folder
 # - using only provided text
 # - redirecting sensitive wellbeing matters to the ombudsman
-from src.tools.policy_wellbeing import query_handbook
+from src.tools.policy_wellbeing import query_handbook as query_policy_wellbeing
+from src.tools.policy_handbook import query_handbook as query_policy_handbook
 from src.tools.expense_tool import validate_expense
 
 # Load API key from .env
@@ -43,6 +44,28 @@ model = genai.GenerativeModel("gemini-2.5-flash")
 # Valid intents
 VALID_INTENTS = ["policy", "holiday", "expense"]
 
+# Keyword lists for deterministic routing in dispatch()
+HANDBOOK_KEYWORDS = [
+    "bereavement", "passed away", "funeral", "death of", "died",
+    "remote work", "work from home", "wfh", "home office",
+    "vacation", "annual leave", "time off", "sick leave", "sick day",
+    "working hours", "office hours", "start time", "attendance",
+    "arrive", "arrival", "what time", "shift", "onsite", "on-site",
+    "fire safety", "emergency procedure",
+]
+
+# Subset of HANDBOOK_KEYWORDS that indicate a working-hours question.
+# Only these trigger needs_role_clarification() — saves one Gemini call for all other policy topics.
+HOURS_KEYWORDS = [
+    "working hours", "office hours", "start time", "attendance",
+    "arrive", "arrival", "what time", "shift", "onsite", "on-site",
+    "in the office", "come in", "be in",
+]
+
+WELLBEING_KEYWORDS = [
+    "harass", "bully", "bullying", "stress", "burnout", "mental health",
+    "misconduct", "whistleblow", "ombudsman", "being treated", "toxic",
+]
 
 # ─────────────────────────────────────────────
 # INTENT CLASSIFICATION
@@ -108,20 +131,25 @@ def classify_policy_type(text: str) -> str:
 You are an HR assistant for GreenLeaf Logistics.
 An employee asked: "{text}"
 
-GreenLeaf handbook clearly defines:
-- Working hours and attendance
-- Time off and vacation
-- Bereavement and special leave
-- Fire safety and emergency procedures
-- Expense claims
+Reply with policy_handbook if the question is about ANY of these:
+- Working hours, attendance, start time, shift schedule
+- Vacation days, annual leave, time off entitlement
+- Bereavement leave, compassionate leave, death of family member
+- Remote work, working from home
+- Fire safety, emergency procedures
+- Expense claims, reimbursements
+- Any other written rule or policy in the employee handbook
 
-NOT in handbook — requires empathetic guidance:
-- Harassment and bullying
-- Psychological wellbeing
-- Mental health and stress
-- Workplace conflict and misconduct
+Reply with policy_wellbeing ONLY if the question is about:
+- Harassment or bullying (someone treating them badly)
+- Mental health, stress, burnout, emotional distress
+- Workplace conflict or misconduct between people
+- Whistleblowing
 
-Which category?
+IMPORTANT: Bereavement (death of a relative) is a handbook policy — reply policy_handbook.
+IMPORTANT: Remote work is a handbook policy — reply policy_handbook.
+IMPORTANT: When in doubt, reply policy_handbook.
+
 Reply with only: policy_handbook or policy_wellbeing
 """
         response = model.generate_content(prompt)
@@ -154,8 +182,11 @@ If the question is about working hours, start time, office hours,
 arrival time, when to come in, opening hours, or attendance schedule
 — the answer DEPENDS on which role the employee has.
 
-Does this question ask about working hours, arrival time,
-or when to be at work?
+Questions about leave, vacation, bereavement, sick days, time off,
+remote work, or expense claims do NOT depend on role — reply NO for those.
+
+Does this question specifically ask about working hours, arrival time,
+or when to be physically present at work (NOT about leave, absence, or remote work)?
 Reply with only YES or NO.
 """
         response = model.generate_content(prompt)
@@ -180,9 +211,12 @@ The employee asked: "{question}"
 Handbook section:
 {handbook_text}
 
-Extract ONLY the information relevant to this employee's role.
-Be concise. Do not include rules for other roles.
-Do not add information not in the handbook.
+Extract the information relevant to this employee's role.
+- If specific hours or details are listed, state them clearly.
+- If the handbook gives partial information (e.g. "refer to IT schedules" or "shift rotation"),
+  include that and tell the employee where to get the full details.
+- Be concise. Do not include rules for other roles.
+- Do not add information not in the handbook.
 """
         response = model.generate_content(prompt)
         return response.text.strip()
@@ -199,15 +233,19 @@ Do not add information not in the handbook.
 def dispatch(intent: str, text: str) -> dict:
 
     if intent == "policy":
-        policy_type = classify_policy_type(text)
+        # Deterministic pre-check — route without asking Gemini to avoid misclassification
+        text_lower_check = text.lower()
+        if any(kw in text_lower_check for kw in WELLBEING_KEYWORDS):
+            policy_type = "policy_wellbeing"
+        elif any(kw in text_lower_check for kw in HANDBOOK_KEYWORDS):
+            policy_type = "policy_handbook"
+        else:
+            policy_type = classify_policy_type(text)
 
         if policy_type == "policy_wellbeing":
-            from src.tools.policy_wellbeing import query_handbook as query_policy_wellbeing
             return query_policy_wellbeing(text)
 
-        from src.tools.policy_handbook import query_handbook as query_policy_handbook
-
-        if needs_role_clarification(text):
+        if any(kw in text_lower_check for kw in HOURS_KEYWORDS) and needs_role_clarification(text):
             text_lower = text.lower()
             known_roles = [
                 "warehouse staff", "warehouse worker", "warehouse",
@@ -244,7 +282,6 @@ def dispatch(intent: str, text: str) -> dict:
         }
 
     elif intent == "expense":
-        from src.tools.expense_tool import validate_expense
         return validate_expense(text)
 
     else:
@@ -273,6 +310,7 @@ def respond(text: str) -> tuple:
     Returns:
         tuple: (result dict, tool_used str)
     """
+    user_lang = "en"
     try:
         # Step 1: Detect language
         user_lang = detect_language(text)
@@ -285,13 +323,13 @@ def respond(text: str) -> tuple:
         intent = classify_intent(textInEnglish)
         print("step 3 done")
 
-        # Step 4: Dispatch — pass language so tools can respond correctly
+        # Step 4: Dispatch
         result = dispatch(intent, textInEnglish)
         print("step 4 done")
         
         # Step 5: Convert answer back to user's language if needed
-        resultInUserLang = translate_text(result.get("answer"), user_lang, "en")
-        result["answer"] = resultInUserLang
+        if "answer" in result:
+            result["answer"] = translate_text(result["answer"], user_lang, "en")
         print("step 5 done")
 
         tool_used = f"{intent}_tool"

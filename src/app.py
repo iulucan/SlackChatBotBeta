@@ -23,6 +23,7 @@ Update: US-03 Security Hardening Done by Samim (Developer)"""
 
 import os
 import sys
+import re
 
 # Add project root to Python path so imports work correctly
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -31,7 +32,7 @@ from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 from dotenv import load_dotenv
 from src.privacy_gate import clean_input, is_blocked, get_block_message
-from src.brain import respond # Addition by Aleksei for US-07
+from src.brain import respond, detect_language, translate_text, dispatch
 
 # Load tokens from .env file (never hardcode tokens in code)
 load_dotenv()
@@ -70,20 +71,19 @@ def process_query(raw_query, say, user_id):
         pending = conversation_state.pop(user_id)
         # Translate follow-up to English and call dispatch directly
         # bypassing respond() to avoid re-classification loop
-        from src.brain import detect_language, translate_text, dispatch
-        follow_up_lang = detect_language(raw_query)
-        follow_up_english = translate_text(raw_query, "en", follow_up_lang)
+        follow_up_lang = detect_language(query)
+        follow_up_english = translate_text(query, "en", follow_up_lang)
         combined = f"{pending} My role is: {follow_up_english}"
  
         result = dispatch("policy", combined)
  
         if "answer" in result:
             result["answer"] = translate_text(result["answer"], follow_up_lang, "en")
- 
-        if "error" in result:
+
+        if "error" in result or "needs_clarification" in result:
             say("Sorry, I could not find an answer. Please contact HR directly.")
             return
- 
+
         say(f"{result['answer']}\n\n_Source: {result['source']}_")
         return
  
@@ -92,9 +92,8 @@ def process_query(raw_query, say, user_id):
  
     # Step 5 — handle clarification request
     if result.get("needs_clarification"):
-        conversation_state[user_id] = result.get("original_english", raw_query)
-        from src.brain import detect_language, translate_text
-        user_lang = detect_language(raw_query)
+        conversation_state[user_id] = result.get("original_english", query)
+        user_lang = detect_language(query)
         translated_question = translate_text(result["question"], user_lang, "en")
         say(translated_question)
         return
@@ -126,7 +125,7 @@ def handle_mention(event, say):
     Handles @GreenLeaf mentions in channels.
     Triggered when someone mentions @GreenLeaf in a public/private channel.
     """
-    raw_query = event.get("text", "")
+    raw_query = re.sub(r"<@[A-Z0-9]+>", "", event.get("text", "")).strip()
     user_id = event.get("user", "unknown")
     process_query(raw_query, say, user_id)
 
