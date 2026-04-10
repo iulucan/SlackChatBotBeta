@@ -127,10 +127,11 @@ def process_query(raw_query, say, user_id):
 @app.message("")
 def handle_message(message, say):
     """
-    Handles direct messages to the bot.
-    
-    Triggered when someone sends a DM to @GreenLeaf.
+    Handles direct messages to the bot only.
+    In channels, the bot responds only to @mentions via handle_mention().
     """
+    if message.get("channel_type") != "im":
+        return
     raw_query = message.get("text", "")
     user_id = message.get("user", "unknown")
     process_query(raw_query, say, user_id)
