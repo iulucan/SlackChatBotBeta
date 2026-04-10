@@ -1,0 +1,14 @@
+services:
+  - type: worker
+    name: greenleaf-hr-agent
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python src/app.py
+    plan: free
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: SLACK_BOT_TOKEN
+        sync: false
+      - key: SLACK_APP_TOKEN
+        sync: false
