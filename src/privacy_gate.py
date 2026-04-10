@@ -1,22 +1,16 @@
 """
-privacy_gate.py — GreenLeaf Bot | Security & Privacy Filter
-=============================================================
+Privacy Gate: First Layer of Defense for Incoming Slack Messages
+
 Acts as the first layer of defense for all incoming Slack messages.
 
 Responsibilities:
-    1. PII Masking  — mask PII with Microsoft Presidio before any processing
-    2. Block Filter — refuse sensitive queries (Wi-Fi, salary, etc.)
+    1. Block Filter — refuse sensitive queries (Wi-Fi, salary, etc.)
+    2. PII Detection & Masking — Microsoft Presidio masks all PII
     3. Injection Guard — detect and block prompt injection attempts
 
-Architecture position (HLD):
-    app.py → privacy_gate.py → brain.py → tools
-                  ↓
-         1. is_blocked()   — check for forbidden terms FIRST (US-03)
-         2. clean_input()  — mask PII only if query passes block check
-
 Compliance:
-    Swiss FADP (nDSG): only masked text is logged or processed
-    US-03: Hard refusal for IT security credentials
+   Swiss FADP (nDSG): only masked text is logged or processed
+   US-03: Hard refusal for IT security credentials
 
 PII Detection — Microsoft Presidio:
     Presidio replaces all previous custom regex and spaCy NER logic.
@@ -32,74 +26,55 @@ Update: US-03 Security Hardening Done by Samim (Developer)
 Update: PII masking refactored to use Microsoft Presidio
 """
 
+import re
+
 # =============================================================================
 # BLOCK FILTER (US-03: SECURITY HARDENING)
 # =============================================================================
-# Check FIRST, before any PII masking. If we're going to block anyway,
-# no point wasting CPU on masking.
 
-# ===== FORBIDDEN TERMS (from GreenLeaf Handbook Section 6) =====
-# These are absolute security boundaries that MUST be blocked.
-# Do NOT share these under ANY circumstances, even with explanations.
-
-FORBIDDEN_IT_SECURITY = [
-    # WiFi / Network credentials (Handbook Section 6)
-    "wifi", "wi-fi", "wireless password", "wifi password", "wi-fi password",
-    "mac address", "mac registration", "mac addr",
-    "network key", "ssid", "network password",
-    "network configuration", "ip address", "router",
-    # Sarah Müller (IT) manages MAC registration — do not reveal process
-    "mac registration process", "device registration", "mac whitelist",
+# Keywords that trigger automatic blocking (case-insensitive)
+BLOCKED_KEYWORDS = [
+    # IT / Network Security
+    "wifi",
+    "wi-fi",
+    "password",
+    "mac address",
+    "ssid",
+    "network",
+    "vpn",
+    "ssh",
+    "credential",
+    "api key",
+    "api_key",
+    "token",
+    # Salary / Compensation (German & French included)
+    "salary",
+    "lohn",
+    "gehalt",
+    "payslip",
+    "raise",
+    "wage",
+    "bonus",
+    "salaire",
+    "paie",
+    # Sensitive HR
+    "background check",
+    "medical",
+    "health record",
 ]
 
-FORBIDDEN_CREDENTIALS = [
-    # Access keys, tokens, internal credentials
-    "slack token", "slack_bot_token", "slack app token", "slack token",
-    "api key", "api secret", "secret key", "private key",
-    # Note: "password" already in IT_SECURITY, but covered here for completeness
-    "passwort", "pwd", "credentials",
-]
-
-FORBIDDEN_HR_DATA = [
-    # Salary and compensation (handled by Beat Müller or HR)
-    "salary", "lohn", "gehalt", "payslip", "pay slip",
-    "raise", "gehaltserhöhung", "bonus", "compensation",
-    "hourly rate", "wage", "income", "earnings",
-]
-
-# Combine all forbidden terms — these are checked against user input
-# Case-insensitive matching in is_blocked()
-BLOCKED_KEYWORDS = FORBIDDEN_IT_SECURITY + FORBIDDEN_CREDENTIALS + FORBIDDEN_HR_DATA
-
-# ===== PROMPT INJECTION PATTERNS (Security against prompt jacking) =====
-# Attempts to override bot instructions or bypass safety rules
+# Patterns that suggest prompt injection or jailbreak attempts
 INJECTION_PATTERNS = [
-    # Ignore instructions variants
-    "ignore previous instructions",
-    "ignore all instructions",
-    "forget your instructions",
-    "disregard your instructions",
-    "override your instructions",
-    # Pretend/act as if variants
+    "ignore previous",
+    "forget previous",
+    "disregard",
+    "new instructions",
+    "new prompt",
     "you are now",
-    "act as if",
     "pretend you are",
-    "act as",
-    "assume you are",
-    # Override and bypass attempts
-    "disregard your",
-    "override your",
-    "forget everything",
-    "new instructions:",
-    "system prompt",
-    "developer mode",
-    "admin mode",
-    "bypass",
+    "act as if",
+    "system override",
     "jailbreak",
-    # Be the assistant variants
-    "start pretending",
-    "now you are",
-    "your role is",
 ]
 
 
@@ -119,10 +94,12 @@ def is_blocked(query: str) -> bool:
     """
     query_lower = query.lower()
 
+    # Check forbidden keywords
     for keyword in BLOCKED_KEYWORDS:
         if keyword in query_lower:
             return True
 
+    # Check injection patterns
     for pattern in INJECTION_PATTERNS:
         if pattern in query_lower:
             return True
@@ -146,15 +123,19 @@ def get_block_message(query: str) -> str:
     """
     query_lower = query.lower()
 
-    if any(k in query_lower for k in ["wifi", "wi-fi", "mac", "network", "ssid"]):
+    # WiFi / Network security
+    if any(k in query_lower for k in ["wifi", "wi-fi", "mac", "network", "ssid", "vpn", "credential"]):
         return "I'm not authorized to provide internal security credentials or network configuration details. Please contact Sarah in IT for these matters."
 
-    if any(k in query_lower for k in ["salary", "lohn", "gehalt", "payslip", "raise", "wage", "bonus"]):
+    # Salary / Compensation
+    if any(k in query_lower for k in ["salary", "lohn", "gehalt", "payslip", "raise", "wage", "bonus", "salaire", "paie"]):
         return "I'm not able to help with salary or payroll questions. Please contact Beat Müller or HR directly."
 
+    # Prompt injection or jailbreak attempts
     if any(p in query_lower for p in INJECTION_PATTERNS):
         return "I'm not able to process that request. Please ask me a question about GreenLeaf HR policies."
 
+    # Generic fallback
     return "I'm not able to help with that. Please contact HR directly."
 
 
@@ -162,7 +143,6 @@ def get_block_message(query: str) -> str:
 # PRESIDIO — PII MASKING
 # =============================================================================
 # Microsoft Presidio handles all PII detection and masking.
-# It replaces the previous custom regex patterns and spaCy NER layers.
 #
 # What Presidio detects out of the box (and what we map to):
 #   PERSON             → [NAME]
@@ -177,10 +157,16 @@ def get_block_message(query: str) -> str:
 # Add/remove languages in PRESIDIO_LANGUAGES below.
 # Each language needs its spaCy model installed (see SETUP_INSTRUCTIONS.md).
 
-from presidio_analyzer import AnalyzerEngine, PatternRecognizer, Pattern
-from presidio_analyzer.nlp_engine import NlpEngineProvider
-from presidio_anonymizer import AnonymizerEngine
-from presidio_anonymizer.entities import OperatorConfig
+try:
+    from presidio_analyzer import AnalyzerEngine, PatternRecognizer, Pattern
+    from presidio_analyzer.nlp_engine import NlpEngineProvider
+    from presidio_anonymizer import AnonymizerEngine
+    from presidio_anonymizer.entities import OperatorConfig
+except ImportError as e:
+    raise ImportError(
+        "Presidio packages not installed. Run:\n"
+        "pip install presidio-analyzer presidio-anonymizer"
+    ) from e
 
 # Languages to scan. Each needs a spaCy model installed.
 # "en" → en_core_web_lg  (or en_core_web_sm for lighter install)
@@ -190,12 +176,12 @@ PRESIDIO_LANGUAGES = ["en", "de", "fr"]
 
 # Map Presidio entity types to GreenLeaf's placeholder labels
 ENTITY_LABEL_MAP = {
-    "PERSON":        "[NAME]",
+    "PERSON": "[NAME]",
     "EMAIL_ADDRESS": "[EMAIL]",
-    "PHONE_NUMBER":  "[PHONE]",
-    "IBAN_CODE":     "[IBAN]",
-    "CREDIT_CARD":   "[CREDIT_CARD]",
-    "EMPLOYEE_ID":   "[ID]",        # custom recognizer below
+    "PHONE_NUMBER": "[PHONE]",
+    "IBAN_CODE": "[IBAN]",
+    "CREDIT_CARD": "[CREDIT_CARD]",
+    "EMPLOYEE_ID": "[ID]",  # custom recognizer below
 }
 
 # Any entity type NOT in the map above gets this default label
@@ -207,14 +193,15 @@ DEFAULT_LABEL = "[PII]"
 # Lower it if you find real names are being missed; raise it for fewer FPs.
 MIN_CONFIDENCE = 0.6
 
-# Words that Presidio (especially the DE/FR models) incorrectly tags as PII.
-# All comparisons are case-insensitive.
-# Add new false positives here whenever you spot them in testing.
+# Words excluded from name detection (months, days, locations, question words)
 FALSE_POSITIVE_TOKENS = {
     # English months / days
     "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
-    "january", "february", "march", "april", "may", "june",
-    "july", "august", "september", "october", "november", "december",
+    "january", "february", "march", "april", "may", "june", "july", "august",
+    "september", "october", "november", "december",
+    # Common English words that look like names at sentence start
+    "is", "are", "the", "a", "an", "my", "your", "his", "her", "our",
+    "email", "hello", "hi", "please", "thanks", "dear",
     # German months / days
     "montag", "dienstag", "mittwoch", "donnerstag", "freitag", "samstag", "sonntag",
     "januar", "februar", "märz", "april", "mai", "juni",
@@ -226,8 +213,9 @@ FALSE_POSITIVE_TOKENS = {
     # Swiss / European cities that models confuse with names
     "basel", "zurich", "zürich", "bern", "geneva", "genève", "lausanne",
     "lugano", "winterthur", "lucerne", "luzern", "fribourg", "freiburg",
-    # Common English words that look like names at sentence start
-    "email", "hello", "hi", "please", "thanks", "dear",
+    # Common words
+    "greenleaf", "powerleaf", "how", "what", "when", "where", "why", "which",
+    "swiss", "switzerland",
 }
 
 # --- Lazy-loaded engine singletons (initialised once on first use) ---
@@ -263,8 +251,19 @@ def _build_nlp_engine_config() -> list[dict]:
 
     if not configs:
         # Absolute fallback — English small model
-        print("[WARNING] No spaCy models found. Falling back to en_core_web_sm.")
-        configs = [{"lang_code": "en", "model_name": "en_core_web_sm"}]
+        print("[WARNING] No spaCy models found. Attempting fallback to en_core_web_sm.")
+        try:
+            import spacy
+            spacy.load("en_core_web_sm")
+            configs = [{"lang_code": "en", "model_name": "en_core_web_sm"}]
+        except OSError as e:
+            raise RuntimeError(
+                "[ERROR] No spaCy models installed. Run:\n"
+                "python -m spacy download en_core_web_sm\n"
+                "python -m spacy download en_core_web_lg\n"
+                "python -m spacy download de_core_news_md\n"
+                "python -m spacy download fr_core_news_md"
+            ) from e
 
     return configs
 
@@ -346,7 +345,7 @@ def _filter_results(
             continue
 
         # 2. Drop known false-positive tokens
-        matched_text = text[result.start:result.end].lower().strip()
+        matched_text = text[result.start : result.end].lower().strip()
         if matched_text in FALSE_POSITIVE_TOKENS:
             continue
 
@@ -375,9 +374,9 @@ def _build_operator_config() -> dict[str, OperatorConfig]:
 # MAIN ENTRY POINT
 # =============================================================================
 
+
 def clean_input(text: str) -> str:
     """
-    Entry point for all incoming messages.
     Masks PII using Microsoft Presidio before any other component
     processes the text.
 
@@ -418,10 +417,11 @@ def clean_input(text: str) -> str:
         results = analyzer.analyze(text=text, language=lang)
         all_results.extend(results)
 
+    # Filter out low-confidence hits and false positives
     all_results = _filter_results(all_results, text)
 
     if not all_results:
-        return text  # Nothing to mask — return early
+        return text  # Nothing to mask — return original
 
     # Anonymize: replace each detected span with its label
     anonymized = anonymizer.anonymize(
@@ -432,6 +432,7 @@ def clean_input(text: str) -> str:
 
     masked = anonymized.text
 
+    # Log only the masked version — never the original
     if masked != text:
         print(f"[PRIVACY] Input masked before processing: {masked}")
 
@@ -439,10 +440,10 @@ def clean_input(text: str) -> str:
 
 
 # =============================================================================
-# HOW TO TEST
+# UNIT TESTS
 # =============================================================================
 #
-# Run the test file:
+# Run with:
 #   python tests/test_privacy_gate.py
 #
 # Expected results:
