@@ -44,15 +44,28 @@ VECTORSTORE = None
 
 SENSITIVE_KEYWORDS = [
     "harassment",
+    "harass",
+    "harassed",
+    "harassing",
     "bullying",
+    "bully",
+    "bullied",
     "whistleblowing",
+    "whistleblow",
     "misconduct",
     "abuse",
     "threat",
     "unsafe",
+    "unsafe workplace",
     "discrimination",
     "sexual harassment",
     "hostile workplace",
+    "conflict",
+    "peer dispute",
+    "disagreement",
+    "argument",
+    "i'm being bullied",
+    "someone is harassing me",
 ]
 
 OMBUDSMAN_EMAIL = "ombudsman@greenleaf-safety.ch"
@@ -123,7 +136,18 @@ def build_vectorstore() -> None:
         split_chunks = text_splitter.split_text(content)
 
         for i, chunk in enumerate(split_chunks):
-            chunks.append(chunk)
+            chunk_clean = chunk.strip()
+            chunk_lower = chunk_clean.lower()
+
+            # Skip noisy / weak chunks
+            if (
+                len(chunk_clean) < 80
+                or "internal use only" in chunk_lower
+                or "version:" in chunk_lower
+            ):
+                continue
+
+            chunks.append(chunk_clean)
             metadatas.append({
                 "source_file": filename,
                 "chunk_id": i
@@ -132,8 +156,6 @@ def build_vectorstore() -> None:
     if not chunks:
         raise ValueError("No chunks created from data files.")
 
-    # We keep embeddings creation inside build_vectorstore()
-    # because it belongs to the vector index creation step.
     embeddings = GoogleGenerativeAIEmbeddings(model="gemini-embedding-001")
 
     VECTORSTORE = FAISS.from_texts(
@@ -160,11 +182,10 @@ def ensure_vectorstore() -> None:
 
 def is_sensitive_wellbeing_question(text: str) -> bool:
     """
-    If question is about harassment / bullying / whistleblowing,
-    the bot must NOT answer from bot logic.
-    It must redirect to the ombudsman.
+    Detects sensitive wellbeing / conduct issues that must be redirected
+    to the confidential ombudsman instead of normal RAG answering.
     """
-    lowered = text.lower()
+    lowered = text.lower().strip()
     return any(keyword in lowered for keyword in SENSITIVE_KEYWORDS)
 
 
@@ -182,10 +203,27 @@ def retrieve_context(query: str, k: int = 3) -> Tuple[str, str]:
     """
     ensure_vectorstore()
 
-    docs = VECTORSTORE.similarity_search(query, k=k)
+    docs = VECTORSTORE.similarity_search(query, k=5)
 
-    if not docs:
+    filtered_docs = []
+
+    for doc in docs:
+        content = doc.page_content.strip()
+        content_lower = content.lower()
+
+        if (
+            len(content) < 80
+            or "internal use only" in content_lower
+            or "version:" in content_lower
+        ):
+            continue
+
+        filtered_docs.append(doc)
+
+    if not filtered_docs:
         raise ValueError("No relevant information found in the indexed data.")
+
+    docs = filtered_docs[:k]
 
     context_parts = []
     source_parts = []
@@ -224,7 +262,7 @@ STRICT RULES:
    "I could not find this information in the provided GreenLeaf documents."
 5. If the question is about harassment, bullying, whistleblowing, or serious misconduct,
    do NOT answer the substance. Instead say:
-   "For harassment, bullying, whistleblowing, or serious misconduct, please contact the confidential ombudsman at ombudsman@greenleaf-safety.ch."
+   "For peers disputes or conflicts, employees should first attempt a 'Coffee Chat' to resolve the issue. If the matter involves serious misconduct, harassment, bullying, or whistleblowing, please contact the confidential ombudsman at ombudsman@greenleaf-safety.ch."
 6. Keep the answer clear and professional.
 
 QUESTION:
@@ -258,8 +296,10 @@ def query_handbook(text: str) -> dict:
         if is_sensitive_wellbeing_question(text):
             return {
                 "answer": (
-                    "For harassment, bullying, whistleblowing, or serious misconduct, "
-                    f"please contact the confidential ombudsman at {OMBUDSMAN_EMAIL}."
+                    "For peers disputes or conflicts, employees should first attempt a "
+                    "'Coffee Chat' to resolve the issue. If the matter involves serious "
+                    "misconduct, harassment, bullying, or whistleblowing, please contact "
+                    f"the confidential ombudsman at {OMBUDSMAN_EMAIL}."
                 ),
                 "source": "GreenLeaf Handbook — Section 9: Sensitive Matters & Conduct"
             }
@@ -290,9 +330,18 @@ if __name__ == "__main__":
     try:
         build_vectorstore()
         print("✅ Vector store built successfully from data/ folder.")
-        test_question = "What happens to food in the fridge on Friday?"
-        result = query_handbook(test_question)
-        print(result)
+
+        test_questions = [
+            "What happens to food in the fridge on Friday?",
+            "I'm being bullied",
+            "Someone is harassing me",
+        ]
+
+        for question in test_questions:
+            print(f"\nQ: {question}")
+            result = query_handbook(question)
+            print(result)
+
     except Exception as e:
         print(f"❌ Error: {e}")
 # >>> HOOMAN END
