@@ -24,6 +24,7 @@ Update: US-03 Security Hardening Done by Samim (Developer)"""
 import os
 import sys
 import re
+from difflib import get_close_matches
 
 # Add project root to Python path so imports work correctly
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -42,6 +43,48 @@ load_dotenv()
 app = App(token=os.environ["SLACK_BOT_TOKEN"])
 
 conversation_state = {}
+
+# ─────────────────────────────────────────────
+# FUZZY ROLE MATCHING
+# ─────────────────────────────────────────────
+
+ROLE_KEYWORDS = [
+    "warehouse",
+    "customer support",
+    "customer service",
+    "support",
+    "office",
+    "general",
+]
+
+def fuzzy_match_role(text: str) -> bool:
+    """
+    Deterministic role detection using fuzzy keyword matching.
+    Catches small typos without an AI call.
+
+    Examples:
+    - "warehose"         → matches "warehouse"
+    - "custumer support" → matches "customer support"
+    - "ofice staff"      → matches "office"
+
+    Returns True if a role keyword is found, False otherwise.
+    """
+    text_lower = text.lower()
+    words = re.findall(r"\b[\w'-]+\b", text_lower)
+    single_word_roles = [kw for kw in ROLE_KEYWORDS if " " not in kw]
+
+    # Single-word fuzzy match
+    for word in words:
+        if get_close_matches(word, single_word_roles, n=1, cutoff=0.82):
+            return True
+
+    # Multi-word substring match (e.g. "customer support", "customer service")
+    multi_word_roles = [kw for kw in ROLE_KEYWORDS if " " in kw]
+    for role in multi_word_roles:
+        if role in text_lower:
+            return True
+
+    return False
 def process_query(raw_query, say, user_id):
     """
     Shared logic for DM messages and channel mentions.
@@ -69,16 +112,28 @@ def process_query(raw_query, say, user_id):
  
     # Step 3 — check if waiting for follow-up from this user
     if user_id in conversation_state:
-        pending = conversation_state.pop(user_id)
+        state = conversation_state.pop(user_id)
+        # Support both old plain string and new dict structure
+        pending = state["pending"] if isinstance(state, dict) else state
+        retries = state.get("retries", 0) if isinstance(state, dict) else 0
         # Translate follow-up to English and call dispatch directly
         # bypassing respond() to avoid re-classification loop
         follow_up_lang = detect_language(query)
         follow_up_english = translate_text(query, "en", follow_up_lang)
         combined = f"{pending} My role is: {follow_up_english}"
 
-        # Validate role before proceeding — ask to rephrase if unclear
-        if not validate_role(follow_up_english):
-            conversation_state[user_id] = pending
+        # Validate role — fuzzy first (fast, deterministic), Gemini fallback for edge cases
+        role_confirmed = fuzzy_match_role(follow_up_english) or validate_role(follow_up_english)
+        if not role_confirmed:
+            retries += 1
+            if retries >= 2:
+                give_up_msg = translate_text(
+                    "I'm having trouble identifying your role. Please start your question again and include your role, for example: 'As warehouse staff, when do I need to be in?'",
+                    follow_up_lang, "en"
+                )
+                say(give_up_msg)
+                return
+            conversation_state[user_id] = {"pending": pending, "retries": retries}
             retry_msg = translate_text(
                 "I didn't catch that — could you rephrase? Please reply with one of:\n• Warehouse staff\n• Customer support\n• General office staff",
                 follow_up_lang, "en"
@@ -91,7 +146,7 @@ def process_query(raw_query, say, user_id):
         handbook_result = query_policy_handbook(combined)
 
         if "error" in handbook_result:
-            conversation_state[user_id] = pending
+            conversation_state[user_id] = {"pending": pending, "retries": retries}
             retry_msg = translate_text(
                 "I didn't catch that — could you rephrase? Please reply with one of:\n• Warehouse staff\n• Customer support\n• General office staff",
                 follow_up_lang, "en"
@@ -109,7 +164,7 @@ def process_query(raw_query, say, user_id):
  
     # Step 5 — handle clarification request
     if result.get("needs_clarification"):
-        conversation_state[user_id] = result.get("original_english", query)
+        conversation_state[user_id] = {"pending": result.get("original_english", query), "retries": 0}
         user_lang = detect_language(query)
         translated_question = translate_text(result["question"], user_lang, "en")
         say(translated_question)
@@ -129,7 +184,13 @@ def handle_message(message, say):
     """
     Handles direct messages to the bot only.
     In channels, the bot responds only to @mentions via handle_mention().
+
+    Skip message_changed, message_deleted, bot_message subtypes — these are
+    Slack system events, not new user messages. Without this check the bot
+    re-processes its own replies and corrupts conversation_state.
     """
+    if message.get("subtype") is not None:
+        return
     if message.get("channel_type") != "im":
         return
     raw_query = message.get("text", "")
