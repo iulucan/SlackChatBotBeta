@@ -165,12 +165,13 @@ def query_handbook(text: str) -> dict:
         {"error": str} on failure
     """
     try:
-        # Check vector store has been ingested
+        # Auto-ingest if vector store is empty (e.g. first Render deploy)
         collection = get_collection()
         if collection.count() == 0:
-            return {
-                "error": "Handbook not loaded. Please run ingestion first."
-            }
+            result = ingest_handbook()
+            if not result["success"]:
+                return {"error": f"Handbook ingestion failed: {result['message']}"}
+            collection = get_collection()
 
         # Search ChromaDB
         results = collection.query(
