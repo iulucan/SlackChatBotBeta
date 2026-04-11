@@ -12,3 +12,4 @@ env/
 .vscode/
 .idea/
 data/employees/
+tests/main_brain.py
