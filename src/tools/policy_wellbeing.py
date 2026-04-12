@@ -24,6 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
+from tenacity import retry, stop_after_attempt, wait_exponential_jitter, retry_if_exception
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
@@ -36,6 +37,33 @@ from langchain_google_genai import GoogleGenerativeAIEmbeddings
 load_dotenv()
 
 client = genai.Client(api_key=os.getenv('GEMINI_API_KEY'))
+
+# Helper function for tenacity to check if the error is a 503/429 (ServiceUnavailable/ResourceExhausted)
+def is_retryable_error(exception: BaseException) -> bool:
+    error_str = str(exception)
+    class_name = exception.__class__.__name__
+    return (any(err in error_str for err in ["503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED", "ServerError"])
+            or class_name in ["ServerError", "ServiceUnavailable", "ResourceExhausted", "APIError"])
+
+@retry(
+    retry=retry_if_exception(is_retryable_error),
+    stop=stop_after_attempt(8),
+    wait=wait_exponential_jitter(initial=1, max=30),
+    before_sleep=lambda rs: print(f"[BRAIN] Capacity issue. Retrying... (Attempt {rs.attempt_number})"),
+    reraise=True # Crucial fix: Forces Tenacity to raise the actual APIError instead of RetryError
+)
+def generate_with_backoff(model_name, prompt_entered, config_type):
+    """
+    Calls Gemini with automatic exponential backoff on 503/429 errors handled by Tenacity
+    Error code 503 is for ServiceUnavailable/ResourceExhausted
+    Error code 429 is for ResourceExhausted
+    """
+    response = client.models.generate_content(
+        model=model_name,
+        contents=prompt_entered,
+        config=config_type
+    )
+    return response
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DATA_DIR = os.path.join(BASE_DIR, "data")
@@ -271,10 +299,10 @@ QUESTION:
 CONTEXT:
 {context}
 """
-    response = client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=prompt,
-        config=types.GenerateContentConfig(automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True))
+    response = generate_with_backoff(
+            prompt_entered=prompt,
+            model_name="gemini-2.5-flash",
+            config_type=types.GenerateContentConfig(automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True))
     )
     return response.text.strip()
 
