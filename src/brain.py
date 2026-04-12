@@ -21,10 +21,16 @@ Branch: feature/brain
 import os
 import sys
 import json
+import time
+import logging
 from typing import Set
 from datetime import date, datetime
+from functools import lru_cache
 
 from dotenv import load_dotenv
+
+# Suppress verbose httpx request logs from Google GenAI SDK
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 # Add project root to Python path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -105,6 +111,7 @@ def generate_with_backoff(model_name, prompt_entered, config_type):
 # INTENT CLASSIFICATION
 # ─────────────────────────────────────────────
 
+@lru_cache(maxsize=256)
 def classify_intent(text: str) -> str:
     """
     Uses Gemini to classify the employee's question into one of:
@@ -142,7 +149,7 @@ Do not explain. Do not add punctuation. Just one word.
 """
         response = generate_with_backoff(
             prompt_entered=prompt,
-            model_name="gemini-2.5-flash",
+            model_name="gemini-2.5-flash-lite",
             config_type=types.GenerateContentConfig(automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True))
         )
         intent = response.text.strip().lower()
@@ -192,7 +199,7 @@ Reply with only: policy_handbook or policy_wellbeing
 """
         response = generate_with_backoff(
             prompt_entered=prompt,
-            model_name="gemini-2.5-flash",
+            model_name="gemini-2.5-flash-lite",
             config_type=types.GenerateContentConfig(automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True))
         )
         result = response.text.strip().lower()
@@ -272,7 +279,7 @@ Reply with only one word: bereavement, safety, or other.
 """
         response = generate_with_backoff(
             prompt_entered=prompt,
-            model_name="gemini-2.5-flash",
+            model_name="gemini-2.5-flash-lite",
             config_type=types.GenerateContentConfig(automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True))
         )
         result = response.text.strip().lower()
@@ -309,7 +316,7 @@ Reply with only YES or NO.
 """
         response = generate_with_backoff(
             prompt_entered=prompt,
-            model_name="gemini-2.5-flash",
+            model_name="gemini-2.5-flash-lite",
             config_type=types.GenerateContentConfig(automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True))
         )
         result = response.text.strip().upper()
@@ -343,7 +350,7 @@ Extract the information relevant to this employee's role.
 """
         response = generate_with_backoff(
             prompt_entered=prompt,
-            model_name="gemini-2.5-flash",
+            model_name="gemini-2.5-flash-lite",
             config_type=types.GenerateContentConfig(automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True))
         )
         return response.text.strip()
@@ -510,25 +517,34 @@ def respond(text: str) -> tuple:
     """
     user_lang = "en"
     try:
+        t0 = time.time()
+
         # Step 1: Detect language
         user_lang = detect_language(text)
+        print(f"[BRAIN] Step 1 detect_language: {round(time.time() - t0, 2)}s")
 
         # Step 2: Convert text to English
+        t1 = time.time()
         text_in_english = translate_text(text, "en", user_lang)
-        print("step 2 done")
+        print(f"[BRAIN] Step 2 translate_text: {round(time.time() - t1, 2)}s")
 
         # Step 3: Classify intent
+        t2 = time.time()
         intent = classify_intent(text_in_english)
-        print("step 3 done")
+        print(f"[BRAIN] Step 3 classify_intent: {round(time.time() - t2, 2)}s")
 
         # Step 4: Dispatch
+        t3 = time.time()
         result = dispatch(intent, text_in_english)
-        print("step 4 done")
+        print(f"[BRAIN] Step 4 dispatch: {round(time.time() - t3, 2)}s")
 
         # Step 5: Convert answer back to user's language if needed
+        t4 = time.time()
         if "answer" in result:
             result["answer"] = translate_text(result["answer"], user_lang, "en")
-        print("step 5 done")
+        print(f"[BRAIN] Step 5 translate_answer: {round(time.time() - t4, 2)}s")
+
+        print(f"[BRAIN] Total response time: {round(time.time() - t0, 2)}s")
 
         tool_used = f"{intent}_tool"
         return result, tool_used
@@ -564,7 +580,7 @@ Reply with exactly two lowercase letters, nothing else.
     try:
         response = generate_with_backoff(
             prompt_entered=prompt,
-            model_name="gemini-2.5-flash",
+            model_name="gemini-2.5-flash-lite",
             config_type=types.GenerateContentConfig(automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True))
         )
         lang = response.text.strip().lower()[:2]
