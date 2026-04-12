@@ -20,12 +20,19 @@ Branch: feature/brain
 
 import os
 import sys
+import json
+from typing import Set
+from datetime import date, datetime
+
+from dotenv import load_dotenv
 
 # Add project root to Python path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import google.generativeai as genai
-from dotenv import load_dotenv
+from google import genai
+from google.genai import types
+from tenacity import retry, stop_after_attempt, wait_exponential_jitter, retry_if_exception
+
 # We switch to Hooman's module because Issue #42/#43 requires:
 # - loading/indexing the whole data/ folder
 # - using only provided text
@@ -33,13 +40,14 @@ from dotenv import load_dotenv
 from src.tools.policy_wellbeing import query_handbook as query_policy_wellbeing
 from src.tools.policy_handbook import query_handbook as query_policy_handbook
 from src.tools.expense_tool import validate_expense
+from src.tools.holiday_tool import SwissHolidayChecker
 
 # Load API key from .env
 load_dotenv()
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
-# Initialize Gemini model
-model = genai.GenerativeModel("gemini-2.5-flash")
+client = genai.Client(
+    api_key=os.getenv('GEMINI_API_KEY')
+)
 
 # Valid intents
 VALID_INTENTS = ["policy", "holiday", "expense"]
@@ -60,6 +68,39 @@ WELLBEING_KEYWORDS = [
     "misconduct", "whistleblow", "ombudsman", "being treated", "toxic",
 ]
 
+VALID_CANTONS: Set[str] = {
+    "AG", "AR", "AI", "BL", "BS", "BE", "FR", "GE", "GL",
+    "GR", "JU", "LU", "NE", "NW", "OW", "SG", "SH", "SZ",
+    "SO", "TG", "TI", "UR", "VD", "VS", "ZH", "ZG"
+}
+
+# Helper function for tenacity to check if the error is a 503/429 (ServiceUnavailable/ResourceExhausted)
+def is_retryable_error(exception: BaseException) -> bool:
+    error_str = str(exception)
+    class_name = exception.__class__.__name__
+    return (any(err in error_str for err in ["503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED", "ServerError"])
+            or class_name in ["ServerError", "ServiceUnavailable", "ResourceExhausted", "APIError"])
+
+@retry(
+    retry=retry_if_exception(is_retryable_error),
+    stop=stop_after_attempt(8),
+    wait=wait_exponential_jitter(initial=1, max=30),
+    before_sleep=lambda rs: print(f"[BRAIN] Capacity issue. Retrying... (Attempt {rs.attempt_number})"),
+    reraise=True # Crucial fix: Forces Tenacity to raise the actual APIError instead of RetryError
+)
+def generate_with_backoff(model_name, prompt_entered, config_type):
+    """
+    Calls Gemini with automatic exponential backoff on 503/429 errors handled by Tenacity
+    Error code 503 is for ServiceUnavailable/ResourceExhausted
+    Error code 429 is for ResourceExhausted
+    """
+    response = client.models.generate_content(
+        model=model_name,
+        contents=prompt_entered,
+        config=config_type
+    )
+    return response
+
 # ─────────────────────────────────────────────
 # INTENT CLASSIFICATION
 # ─────────────────────────────────────────────
@@ -76,7 +117,7 @@ def classify_intent(text: str) -> str:
         Output: "policy" | "holiday" | "expense"
 
     Args:
-        text: the employee's sanitised question
+        text: the employee's sanitized question
 
     Returns:
         str: one of "policy", "holiday", "expense"
@@ -99,7 +140,11 @@ Employee question: "{text}"
 Reply with exactly one word only: policy, holiday, or expense.
 Do not explain. Do not add punctuation. Just one word.
 """
-        response = model.generate_content(prompt)
+        response = generate_with_backoff(
+            prompt_entered=prompt,
+            model_name="gemini-2.5-flash",
+            config_type=types.GenerateContentConfig(automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True))
+        )
         intent = response.text.strip().lower()
 
         # Validate response is one of the expected intents
@@ -111,7 +156,7 @@ Do not explain. Do not add punctuation. Just one word.
         return intent
 
     except Exception as e:
-        print(f"[BRAIN ERROR] Classification failed: {e} — defaulting to policy")
+        print(f"[BRAIN ERROR] Classification failed: {e.__class__.__name__}: {e} — defaulting to policy")
         return "policy"
 
 # ─────────────────────────────────────────────
@@ -145,7 +190,11 @@ IMPORTANT: When in doubt, reply policy_handbook.
 
 Reply with only: policy_handbook or policy_wellbeing
 """
-        response = model.generate_content(prompt)
+        response = generate_with_backoff(
+            prompt_entered=prompt,
+            model_name="gemini-2.5-flash",
+            config_type=types.GenerateContentConfig(automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True))
+        )
         result = response.text.strip().lower()
         if result not in ["policy_handbook", "policy_wellbeing"]:
             return "policy_handbook"
@@ -182,12 +231,16 @@ Does this question specifically ask about working hours, arrival time,
 or when to be physically present at work (NOT about leave, absence, or remote work)?
 Reply with only YES or NO.
 """
-        response = model.generate_content(prompt)
+        response = generate_with_backoff(
+            prompt_entered=prompt,
+            model_name="gemini-2.5-flash",
+            config_type=types.GenerateContentConfig(automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True))
+        )
         result = response.text.strip().upper()
         print(f"[BRAIN] Needs role clarification: {result}")
         return "YES" in result
     except Exception as e:
-        print(f"[BRAIN ERROR] {e} — skipping clarification")
+        print(f"[BRAIN ERROR] Clarification check failed: {e} — skipping")
         return False
 
 
@@ -217,7 +270,11 @@ Classify this as exactly one of:
 
 Reply with only one word: bereavement, safety, or other.
 """
-        response = model.generate_content(prompt)
+        response = generate_with_backoff(
+            prompt_entered=prompt,
+            model_name="gemini-2.5-flash",
+            config_type=types.GenerateContentConfig(automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True))
+        )
         result = response.text.strip().lower()
         if result not in ["bereavement", "safety", "other"]:
             return "other"
@@ -250,7 +307,11 @@ GreenLeaf has exactly three roles:
 Does this reply clearly identify one of these three roles, even with spelling mistakes?
 Reply with only YES or NO.
 """
-        response = model.generate_content(prompt)
+        response = generate_with_backoff(
+            prompt_entered=prompt,
+            model_name="gemini-2.5-flash",
+            config_type=types.GenerateContentConfig(automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True))
+        )
         result = response.text.strip().upper()
         print(f"[BRAIN] Role validated: {result}")
         return "YES" in result
@@ -280,10 +341,14 @@ Extract the information relevant to this employee's role.
 - Be concise. Do not include rules for other roles.
 - Do not add information not in the handbook.
 """
-        response = model.generate_content(prompt)
+        response = generate_with_backoff(
+            prompt_entered=prompt,
+            model_name="gemini-2.5-flash",
+            config_type=types.GenerateContentConfig(automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True))
+        )
         return response.text.strip()
     except Exception as e:
-        print(f"[BRAIN ERROR] {e} — returning full answer")
+        print(f"[BRAIN ERROR] Filter by role failed: {e} — returning full answer")
         return handbook_text
 
 
@@ -331,10 +396,88 @@ def dispatch(intent: str, text: str) -> dict:
         return query_policy_handbook(text)
 
     elif intent == "holiday":
-        return {
-            "answer": "Holiday checking is coming. For now please check the Basel-Stadt cantonal calendar.",
-            "source": "GreenLeaf Bot — feature in development"
-        }
+        text_lower_check = text.lower()
+        detected_language = detect_language(text_lower_check)
+
+        # 1. Use Gemini to detect the date and Canton via Structured JSON Output
+        extraction_prompt = f"""
+                Analyze this user request: "{text}"
+                The current date is: {date.today().isoformat()}
+
+                Extract the specific date and the Swiss Canton mentioned.
+                Switzerland has 26 Cantons with these 2-letter codes: 
+                AG, AR, AI, BL, BS, BE, FR, GE, GL, GR, JU, LU, NE, NW, OW, SG, SH, SZ, SO, TG, TI, UR, VD, VS, ZH, ZG.
+
+                Rules:
+                - If no Canton is explicitly mentioned, default to "BS" (Basel-Stadt).
+                - If no year is mentioned, default to the current year.
+                - Calculate relative dates (like "tomorrow") based on the current date.
+                """
+
+        # Using types.Schema to properly trigger the 'parsed' object in google.genai
+        extraction_schema = types.Schema(
+            type=types.Type.OBJECT,
+            properties={
+                "date": types.Schema(type=types.Type.STRING, description="YYYY-MM-DD format"),
+                "canton": types.Schema(type=types.Type.STRING, description="2-letter Canton code")
+            },
+            required=["date", "canton"]
+        )
+
+        try:
+            extraction_response = generate_with_backoff(
+                prompt_entered=extraction_prompt,
+                model_name="gemini-2.5-flash",
+                config_type=types.GenerateContentConfig(
+                    response_mime_type='application/json',
+                    response_schema=extraction_schema,
+                    automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True))
+            )
+
+            # Safely access the natively parsed object (solves parsed=None issue)
+            if extraction_response.parsed:
+                parsed_obj = extraction_response.parsed
+                # Handles both dictionary and object formats depending on GenAI internal parsing
+                date_str = parsed_obj.get("date") if isinstance(parsed_obj, dict) else getattr(parsed_obj, "date", None)
+                canton_code = parsed_obj.get("canton", "BS") if isinstance(parsed_obj, dict) else getattr(parsed_obj, "canton", "BS")
+            else:
+                extracted_data = json.loads(str(extraction_response.text))
+                date_str = extracted_data.get("date")
+                canton_code = extracted_data.get("canton", "BS") # Defaulting to Canton BS
+
+            canton_to_check_for_holiday = canton_code if canton_code in VALID_CANTONS else "BS"
+            date_to_check_for_holiday = datetime.strptime(str(date_str), "%Y-%m-%d").date()
+
+        except Exception as e:
+            print(f"[BRAIN ERROR] Could not extract date and Canton via Gemini: {e}")
+            error_msg = translate_text("I couldn't understand the exact date or Canton you're asking about.",
+                                            target_lang=detected_language, source_lang="en")
+            return {"error": error_msg}
+
+        # 2. Check the OpenHolidays API
+        holiday_checker = SwissHolidayChecker(language=detected_language)
+
+        try:
+            holiday_info = holiday_checker.get_holiday(date_to_check_for_holiday, canton_to_check_for_holiday)
+            formatted_date = date_to_check_for_holiday.strftime('%Y-%m-%d')
+
+            if holiday_info:
+                english_answer = f"Yes, {formatted_date} is a holiday in {canton_to_check_for_holiday}: {holiday_info.name}."
+            else:
+                english_answer = f"No, {formatted_date} is NOT a holiday in {canton_to_check_for_holiday}."
+
+            holiday_answer = translate_text(english_answer, target_lang=detected_language, source_lang="en")
+            print(f"[BRAIN] Holiday answer: {holiday_answer}")
+            return {"answer": holiday_answer, "source": "OpenHolidays API call."}
+
+        except Exception as e:
+            print(f"[BRAIN ERROR] OpenHolidays API request failed: {e}")
+            holiday_answer = translate_text("I'm sorry, I couldn't fetch the holiday data at this moment.",
+                                            target_lang=detected_language, source_lang="en")
+            return {
+                "answer": holiday_answer,
+                "source": "OpenHolidays API call."
+            }
 
     elif intent == "expense":
         return validate_expense(text)
@@ -356,11 +499,11 @@ def respond(text: str) -> tuple:
     Detect the user's language and respond in the SAME language.
 
     Interface contract (do not change):
-        Input:  text: str — sanitised employee question
+        Input:  text: str — sanitized employee question
         Output: tuple(dict, str) — (result, tool_used)
 
     Args:
-        text: the employee's sanitised question
+        text: the employee's sanitized question
 
     Returns:
         tuple: (result dict, tool_used str)
@@ -371,17 +514,17 @@ def respond(text: str) -> tuple:
         user_lang = detect_language(text)
 
         # Step 2: Convert text to English
-        textInEnglish = translate_text(text, "en", user_lang)
+        text_in_english = translate_text(text, "en", user_lang)
         print("step 2 done")
 
         # Step 3: Classify intent
-        intent = classify_intent(textInEnglish)
+        intent = classify_intent(text_in_english)
         print("step 3 done")
 
         # Step 4: Dispatch
-        result = dispatch(intent, textInEnglish)
+        result = dispatch(intent, text_in_english)
         print("step 4 done")
-        
+
         # Step 5: Convert answer back to user's language if needed
         if "answer" in result:
             result["answer"] = translate_text(result["answer"], user_lang, "en")
@@ -392,11 +535,11 @@ def respond(text: str) -> tuple:
 
     except Exception as e:
         error_message = "Something went wrong. Please contact HR directly."
-        error_messageInUserLang = translate_text(error_message, user_lang, "en")
+        error_message_in_user_lang = translate_text(error_message, user_lang, "en")
         return {
-            "error": error_messageInUserLang
+            "error": error_message_in_user_lang
         }, "unknown"
-    
+
 
 def detect_language(text: str) -> str:
     """
@@ -419,7 +562,11 @@ Reply with exactly two lowercase letters, nothing else.
 """
 
     try:
-        response = model.generate_content(prompt)
+        response = generate_with_backoff(
+            prompt_entered=prompt,
+            model_name="gemini-2.5-flash",
+            config_type=types.GenerateContentConfig(automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True))
+        )
         lang = response.text.strip().lower()[:2]
 
         # Safety fallback
@@ -432,12 +579,12 @@ Reply with exactly two lowercase letters, nothing else.
     except Exception as e:
         print(f"[BRAIN] Language detection failed: {e} — defaulting to en")
         return "en"
-    
+
 
 def translate_text(text: str, target_lang: str, source_lang: str = None) -> str:
     """
     Translates text to the target language using Gemini.
-    
+
     Args:
         text: The text to translate
         target_lang: Target language ISO 639-1 code (e.g., 'de', 'fr', 'it', 'en')
@@ -483,7 +630,11 @@ Text to translate:
 Reply with **only** the translated text. Nothing else.
 """
 
-        response = model.generate_content(prompt)
+        response = generate_with_backoff(
+            prompt_entered=prompt,
+            model_name="gemini-2.5-flash",
+            config_type=types.GenerateContentConfig(automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True))
+        )
         translated = response.text.strip()
 
         print(f"[BRAIN] Translated from {source_lang or 'auto'} → {target_lang}: {len(text)} → {len(translated)} chars")

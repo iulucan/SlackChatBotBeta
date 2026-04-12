@@ -10,8 +10,11 @@ Security & Architectural Features:
 - Enforces strict HTTP request timeouts to prevent system hangs.
 
 Usage:
-    checker = SwissHolidayChecker(language="FR")
-    is_holiday = checker.is_holiday(date(2026, 5, 1), "BS")
+    checker = SwissHolidayChecker(language="EN")
+    is_holiday1 = checker.is_holiday(date(2026, 5, 1), "BS"), the answer is YES
+    is_holiday2 = checker.is_holiday(date(2026, 12, 25), "BS"), the answer is YES
+    is_holiday3 = checker.is_holiday(date(2026, 9, 21), "VD"), the answer is YES
+    is_holiday4 = checker.is_holiday(date(2026, 9, 21), "BS"), the answer is NO
 """
 
 import logging
