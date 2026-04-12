@@ -112,18 +112,27 @@ def process_query(raw_query, say, user_id):
  
     # Step 3 — check if waiting for follow-up from this user
     if user_id in conversation_state:
+        import time as _time
+        t_followup = _time.time()
+
         state = conversation_state.pop(user_id)
         # Support both old plain string and new dict structure
         pending = state["pending"] if isinstance(state, dict) else state
         retries = state.get("retries", 0) if isinstance(state, dict) else 0
         # Translate follow-up to English and call dispatch directly
         # bypassing respond() to avoid re-classification loop
+        t_lang = _time.time()
         follow_up_lang = detect_language(query)
+        print(f"[APP] Follow-up detect_language: {round(_time.time() - t_lang, 2)}s")
+
         follow_up_english = translate_text(query, "en", follow_up_lang)
         combined = f"{pending} My role is: {follow_up_english}"
 
         # Validate role — fuzzy first (fast, deterministic), Gemini fallback for edge cases
+        t_role = _time.time()
         role_confirmed = fuzzy_match_role(follow_up_english) or validate_role(follow_up_english)
+        print(f"[APP] Follow-up validate_role: {round(_time.time() - t_role, 2)}s")
+
         if not role_confirmed:
             retries += 1
             if retries >= 2:
@@ -142,8 +151,12 @@ def process_query(raw_query, say, user_id):
             return
 
         # We already know this is a working hours question — skip dispatch/clarification loop
-        # and go straight to handbook + role filter
-        handbook_result = query_policy_handbook(combined)
+        # and go straight to handbook + role filter.
+        # Use original question for ChromaDB lookup — adding "My role is: X" confuses
+        # semantic search and can return the wrong handbook section.
+        t_handbook = _time.time()
+        handbook_result = query_policy_handbook(pending)
+        print(f"[APP] Follow-up query_handbook: {round(_time.time() - t_handbook, 2)}s")
 
         if "error" in handbook_result:
             conversation_state[user_id] = {"pending": pending, "retries": retries}
@@ -154,8 +167,12 @@ def process_query(raw_query, say, user_id):
             say(retry_msg)
             return
 
+        t_filter = _time.time()
         answer = filter_by_role(combined, handbook_result["answer"])
+        print(f"[APP] Follow-up filter_by_role: {round(_time.time() - t_filter, 2)}s")
+
         answer = translate_text(answer, follow_up_lang, "en")
+        print(f"[APP] Follow-up total: {round(_time.time() - t_followup, 2)}s")
         say(f"{answer}\n\n_Source: {handbook_result['source']}_")
         return
  
