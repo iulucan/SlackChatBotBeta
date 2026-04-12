@@ -65,7 +65,7 @@ HANDBOOK_KEYWORDS = [
 
 WELLBEING_KEYWORDS = [
     "harass", "bully", "bullying", "stress", "burnout", "mental health",
-    "misconduct", "whistle-blow", "ombudsman", "being treated", "toxic",
+    "misconduct", "whistleblow", "ombudsman", "being treated", "toxic",
 ]
 
 VALID_CANTONS: Set[str] = {
@@ -299,7 +299,6 @@ def validate_role(text: str) -> bool:
 You are an HR assistant for GreenLeaf Logistics.
 The employee replied: "{text}"
 
-GreenLeaf has exactly three roles:
 GreenLeaf has exactly three roles:
 - Warehouse staff (also: warehouse, warehose, warehouss, warehouse worker, etc.)
 - Customer support (also: customer service, support team, support agent, etc.)
