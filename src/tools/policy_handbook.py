@@ -27,7 +27,11 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 import chromadb
-from chromadb.utils import embedding_functions
+from chromadb import EmbeddingFunction, Documents, Embeddings
+from dotenv import load_dotenv
+from google import genai as google_genai
+
+load_dotenv()
 
 # ─────────────────────────────────────────────
 # CONFIGURATION
@@ -38,18 +42,56 @@ VECTOR_STORE_PATH = os.path.join("vector_store")
 COLLECTION_NAME = "handbook"
 MAX_RESULTS = 1  # number of chunks to retrieve per query
 
+# Sections whose titles match these keywords are kept as one chunk.
+# Section 3 — role filter needs full context
+# Section 4 — vacation policy spans multiple bullets (entitlement + request process)
+# Section 5 — bereavement tiers must be read together
+# Section 8 — safety procedures must be read together
+KEEP_WHOLE_SECTION_TITLES = [
+    "working hours", "attendance",          # Section 3
+    "time off", "vacation", "holidays",     # Section 4
+    "bereavement", "special leave",         # Section 5
+    "safety", "emergency",                  # Section 8
+]
+
 
 # ─────────────────────────────────────────────
 # CHROMADB SETUP
 # ─────────────────────────────────────────────
 
+class GeminiEmbeddingFunction(EmbeddingFunction):
+    """
+    ChromaDB-compatible embedding function using google.genai SDK.
+    Uses text-embedding-001 — consistent with policy_wellbeing.py approach.
+    """
+    def __init__(self):
+        self._client = google_genai.Client(
+            api_key=os.environ.get("GEMINI_API_KEY")
+        )
+
+    def __call__(self, input: Documents) -> Embeddings:
+        embeddings = []
+        for text in input:
+            text = text.strip() if text else ""
+            if not text:
+                embeddings.append([0.0] * 3072)
+                continue
+            result = self._client.models.embed_content(
+                model="gemini-embedding-001",
+                contents=text
+            )
+            embeddings.append(result.embeddings[0].values)
+        return embeddings
+
+
 def get_collection():
     """
-    Returns the ChromaDB collection.
+    Returns the ChromaDB collection using Google's text-embedding-001 model.
+    Consistent with policy_wellbeing.py embedding approach.
     Creates the vector_store directory if it does not exist.
     """
     client = chromadb.PersistentClient(path=VECTOR_STORE_PATH)
-    embedding_fn = embedding_functions.DefaultEmbeddingFunction()
+    embedding_fn = GeminiEmbeddingFunction()
     collection = client.get_or_create_collection(
         name=COLLECTION_NAME,
         embedding_function=embedding_fn
@@ -95,24 +137,65 @@ def ingest_handbook(path: str = HANDBOOK_PATH) -> dict:
 
         for line in content.split("\n"):
             if line.startswith("##") or line.startswith("# "):
-                # Save previous section
                 if current_section.strip():
                     sections.append({
                         "title": current_title,
                         "content": current_section.strip()
                     })
-                # Start new section
                 current_title = line.replace("#", "").strip()
                 current_section = ""
             else:
                 current_section += line + "\n"
 
-        # Save last section
         if current_section.strip():
             sections.append({
                 "title": current_title,
                 "content": current_section.strip()
             })
+
+        # Build final chunks — split bullet-point sections into per-bullet chunks
+        # EXCEPT sections with role-specific rules (filter_by_role needs the full text)
+        chunks = []
+        for section in sections:
+            title_lower = section["title"].lower()
+            keep_whole = any(kw in title_lower for kw in KEEP_WHOLE_SECTION_TITLES)
+
+            if keep_whole:
+                # Keep whole section — brain.py filter_by_role() needs all role bullets
+                chunks.append(section)
+                continue
+
+            # Split into per-bullet chunks for precise retrieval
+            bullets = []
+            intro_lines = []
+            for line in section["content"].split("\n"):
+                stripped = line.strip()
+                if stripped.startswith("*") or stripped.startswith("-"):
+                    bullets.append(stripped)
+                elif stripped:
+                    intro_lines.append(stripped)
+
+            if not bullets:
+                # No bullet points — keep section whole
+                chunks.append(section)
+                continue
+
+            intro = " ".join(intro_lines)
+            for bullet in bullets:
+                # Extract bold topic label e.g. "**Kitchen:**" → "Kitchen"
+                if "**" in bullet:
+                    parts = bullet.split("**")
+                    topic = parts[1].rstrip(":") if len(parts) >= 2 else bullet[:40]
+                else:
+                    topic = bullet.lstrip("*-").strip()[:40]
+
+                bullet_text = bullet.lstrip("*-").strip()
+                chunk_content = f"{intro}\n{bullet_text}" if intro else bullet_text
+
+                chunks.append({
+                    "title": f"{section['title']} — {topic}",
+                    "content": chunk_content
+                })
 
         # Store in ChromaDB
         collection = get_collection()
@@ -122,18 +205,18 @@ def ingest_handbook(path: str = HANDBOOK_PATH) -> dict:
         if existing["ids"]:
             collection.delete(ids=existing["ids"])
 
-        # Add sections to ChromaDB
-        for i, section in enumerate(sections):
+        # Add chunks to ChromaDB
+        for i, chunk in enumerate(chunks):
             collection.add(
-                documents=[section["content"]],
-                metadatas=[{"source": section["title"]}],
-                ids=[f"section_{i}"]
+                documents=[chunk["content"]],
+                metadatas=[{"source": chunk["title"]}],
+                ids=[f"chunk_{i}"]
             )
 
         return {
             "success": True,
-            "chunks_ingested": len(sections),
-            "message": f"Successfully ingested {len(sections)} sections from handbook"
+            "chunks_ingested": len(chunks),
+            "message": f"Successfully ingested {len(chunks)} chunks from handbook"
         }
 
     except Exception as e:
