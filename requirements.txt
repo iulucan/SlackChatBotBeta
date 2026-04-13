@@ -1,6 +1,5 @@
 slack-bolt
 python-dotenv
-google-generativeai
 google-genai
 tenacity
 chromadb
