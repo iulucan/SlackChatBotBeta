@@ -297,7 +297,7 @@ ITALIAN_EXCLUDED_STARTS = {
 # English excluded words
 ENGLISH_EXCLUDED_STARTS = {
     "can", "could", "must", "will", "would", "have", "has", "had",
-    "am", "is", "are", "was", "were", "be", "being", "been", "out", "going out"
+    "am", "is", "are", "was", "were", "be", "being", "been", "out", "going out",
     "how", "what", "when", "where", "why", "which", "going", "come", "time", "date", "day", "week", "month", "year",
 }
 
@@ -471,14 +471,6 @@ def _detect_capitalized_pairs(text: str, language: str = "en") -> List[Tuple[int
         # Skip if either word is very short
         if len(first) < 3 or len(second) < 3:
          continue
-
-    for match in pattern.finditer(text):
-        first = match.group(1).lower()
-        second = match.group(2).lower()
-        
-        # Skip if either word is excluded
-        if first in excluded or second in excluded:
-            continue
         
         # Skip if either word is very short (catches "I'm", "I am", etc.)
         if len(first) < 3 or len(second) < 3:
