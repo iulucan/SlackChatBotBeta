@@ -499,7 +499,7 @@ def dispatch(intent: str, text: str) -> dict:
 # MAIN RESPOND FUNCTION — called by app.py
 # ─────────────────────────────────────────────
 
-def respond(text: str) -> tuple:
+def respond(text_in_english: str, user_lang: str) -> tuple:
     """
     Main function called by app.py.
     Classifies intent and dispatches to correct tool.
@@ -515,30 +515,21 @@ def respond(text: str) -> tuple:
     Returns:
         tuple: (result dict, tool_used str)
     """
-    user_lang = "en"
+
     try:
         t0 = time.time()
 
-        # Step 1: Detect language
-        user_lang = detect_language(text)
-        print(f"[BRAIN] Step 1 detect_language: {round(time.time() - t0, 2)}s")
-
-        # Step 2: Convert text to English
-        t1 = time.time()
-        text_in_english = translate_text(text, "en", user_lang)
-        print(f"[BRAIN] Step 2 translate_text: {round(time.time() - t1, 2)}s")
-
-        # Step 3: Classify intent
+        # Step 1: Classify intent
         t2 = time.time()
         intent = classify_intent(text_in_english)
         print(f"[BRAIN] Step 3 classify_intent: {round(time.time() - t2, 2)}s")
 
-        # Step 4: Dispatch
+        # Step 2: Dispatch
         t3 = time.time()
         result = dispatch(intent, text_in_english)
         print(f"[BRAIN] Step 4 dispatch: {round(time.time() - t3, 2)}s")
 
-        # Step 5: Convert answer back to user's language if needed
+        # Step 3: Convert answer back to user's language if needed
         t4 = time.time()
         if "answer" in result:
             result["answer"] = translate_text(result["answer"], user_lang, "en")
@@ -557,46 +548,7 @@ def respond(text: str) -> tuple:
         }, "unknown"
 
 
-def detect_language(text: str) -> str:
-    """
-    Detects the language of the user's message.
-    Returns ISO 639-1 code: 'en', 'de', 'fr', 'it', etc.
-    """
-    prompt = f"""
-You are a highly accurate language detector.
-Analyze the following text and reply with **only** the ISO 639-1 language code (two letters).
-
-Examples:
-- "Hello, how are you?" → en
-- "Wann muss ich im Büro sein?" → de
-- "Quelle est la politique de congés ?" → fr
-- "Quando è il prossimo giorno festivo a Basilea?" → it
-
-Text: "{text}"
-
-Reply with exactly two lowercase letters, nothing else.
-"""
-
-    try:
-        response = generate_with_backoff(
-            prompt_entered=prompt,
-            model_name="gemini-2.5-flash-lite",
-            config_type=types.GenerateContentConfig(automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True))
-        )
-        lang = response.text.strip().lower()[:2]
-
-        # Safety fallback
-        if lang not in ("en", "de", "fr", "it"):
-            lang = "en"
-
-        print(f"[BRAIN] Language detected: {lang}")
-        return lang
-
-    except Exception as e:
-        print(f"[BRAIN] Language detection failed: {e} — defaulting to en")
-        return "en"
-
-
+@lru_cache(maxsize=128)
 def translate_text(text: str, target_lang: str, source_lang: str = None) -> str:
     """
     Translates text to the target language using Gemini.
