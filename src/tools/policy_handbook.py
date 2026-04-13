@@ -62,7 +62,7 @@ KEEP_WHOLE_SECTION_TITLES = [
 class GeminiEmbeddingFunction(EmbeddingFunction):
     """
     ChromaDB-compatible embedding function using google.genai SDK.
-    Uses text-embedding-004 — consistent with policy_wellbeing.py approach.
+    Uses text-embedding-001 — consistent with policy_wellbeing.py approach.
     """
     def __init__(self):
         self._client = google_genai.Client(
@@ -86,7 +86,7 @@ class GeminiEmbeddingFunction(EmbeddingFunction):
 
 def get_collection():
     """
-    Returns the ChromaDB collection using Google's text-embedding-004 model.
+    Returns the ChromaDB collection using Google's text-embedding-001 model.
     Consistent with policy_wellbeing.py embedding approach.
     Creates the vector_store directory if it does not exist.
     """
