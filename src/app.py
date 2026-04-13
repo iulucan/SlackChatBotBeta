@@ -32,6 +32,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 from dotenv import load_dotenv
+from src.it_security_handler import is_it_security_query
 from src.privacy_gate import clean_input, is_blocked, get_block_message
 from src.brain import respond, detect_language, translate_text, filter_by_role, validate_role
 from src.tools.policy_handbook import query_handbook as query_policy_handbook
@@ -90,27 +91,36 @@ def process_query(raw_query, say, user_id):
     Shared logic for DM messages and channel mentions.
  
     Flow:
-        1. Security check on raw text first (US-03)
-        2. PII masking
-        3. Conversation state — handle follow-up answers
-        4. Brain router
-        5. Reply to employee
+        1. IT security handler check on raw text first
+        2. Security check on raw text (US-03)
+        3. PII masking
+        4. Conversation state — handle follow-up answers
+        5. Brain router
+        6. Reply to employee
     """
-    # Step 1 — security check on raw text first
-    if is_blocked(raw_query):
+    # Step 1 — IT security handler (must run before privacy gate)
+    is_it_query, it_response = is_it_security_query(raw_query)
+    if is_it_query:
+        say(it_response)
+        return
+
+    # Step 2 — security check on raw text first
+    is_raw_blocked, _ = is_blocked(raw_query)
+    if is_raw_blocked:
         say(get_block_message(raw_query))
         return
  
-    # Step 2 — PII masking
+    # Step 3 — PII masking
     query = clean_input(raw_query)
     # Optional second safety check on masked text
     # This protects against any risky content that may still remain after masking
-    if is_blocked(query):
+    is_masked_blocked, _ = is_blocked(query)
+    if is_masked_blocked:
         say(get_block_message(query))
         return
  
  
-    # Step 3 — check if waiting for follow-up from this user
+    # Step 4 — check if waiting for follow-up from this user
     if user_id in conversation_state:
         import time as _time
         t_followup = _time.time()
@@ -176,10 +186,10 @@ def process_query(raw_query, say, user_id):
         say(f"{answer}\n\n_Source: {handbook_result['source']}_")
         return
  
-    # Step 4 — brain router
+    # Step 5 — brain router
     result, tool_used = respond(query)
  
-    # Step 5 — handle clarification request
+    # Step 6 — handle clarification request
     if result.get("needs_clarification"):
         conversation_state[user_id] = {"pending": result.get("original_english", query), "retries": 0}
         user_lang = detect_language(query)
@@ -187,12 +197,12 @@ def process_query(raw_query, say, user_id):
         say(translated_question)
         return
  
-    # Step 6 — handle error
+    # Step 7 — handle error
     if "error" in result:
         say("Sorry, I could not find an answer. Please contact HR directly.")
         return
  
-    # Step 7 — send answer
+    # Step 8 — send answer
     say(f"{result['answer']}\n\n_Source: {result['source']}_")
 
 
