@@ -123,6 +123,27 @@ def process_query(raw_query, say, client, channel, user_id):
         say(it_response)
         return
 
+    # Step 1b — Greeting check
+    # Intercept simple greetings before they reach brain.py / ChromaDB.
+    # Without this, "hello" returns "Sorry, I could not find an answer."
+    GREETINGS = {
+        "hello": "en", "hi": "en", "hey": "en", "yo": "en",
+        "good morning": "en", "good afternoon": "en", "good evening": "en",
+        "hallo": "de", "guten tag": "de", "guten morgen": "de", "guten abend": "de",
+        "bonjour": "fr", "bonsoir": "fr", "salut": "fr",
+        "ciao": "it", "buongiorno": "it", "buonasera": "it",
+    }
+    GREETING_RESPONSES = {
+        "en": "Hello! I'm the GreenLeaf HR Assistant. How can I help you today?",
+        "de": "Hallo! Ich bin der GreenLeaf HR-Assistent. Wie kann ich Ihnen heute helfen?",
+        "fr": "Bonjour! Je suis l'assistant RH GreenLeaf. Comment puis-je vous aider aujourd'hui?",
+        "it": "Ciao! Sono l'assistente HR di GreenLeaf. Come posso aiutarti oggi?",
+    }
+    greeting_lang = GREETINGS.get(raw_query.strip().lower())
+    if greeting_lang:
+        say(GREETING_RESPONSES[greeting_lang])
+        return
+
     # Step 2 — security check on raw text first
     is_raw_blocked, _ = is_blocked(raw_query)
     if is_raw_blocked:
@@ -141,7 +162,11 @@ def process_query(raw_query, say, client, channel, user_id):
 
     # --- NEW: IMMEDIATE ACKNOWLEDGMENT ---
     # We use langid because it is local and instant (<0.01s)
-    user_lang = detect_language2(query)
+    if user_id in conversation_state:
+        state = conversation_state[user_id]
+        user_lang = state.get("language", "en")
+    else:
+        user_lang = detect_language2(query)
 
     wait_messages = {
         "en": "I'm checking that for you, please give me a moment... :mag:",
@@ -157,6 +182,7 @@ def process_query(raw_query, say, client, channel, user_id):
             channel=channel,
             text=wait_text
         )
+            
         msg_ts = initial_response["ts"]
         # You can save this to reply in a thread later if you want:
         # thread_ts = initial_response["ts"]
@@ -234,7 +260,7 @@ def process_query(raw_query, say, client, channel, user_id):
         # Step 5 — handle clarification request
         if result.get("needs_clarification"):
             print(query)
-            conversation_state[user_id] = {"pending": result.get("original_english", query), "retries": 0}
+            conversation_state[user_id] = {"pending": result.get("original_english", query), "retries": 0, "language": user_lang}
             translated_question = translate_text(result["question"], user_lang, "en")
             client.chat_update(channel=channel, ts=msg_ts, text=translated_question)
             return
