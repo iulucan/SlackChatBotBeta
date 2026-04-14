@@ -8,10 +8,11 @@ Architecture (HLD):
 
 Message flow (US-03 UPDATED):
     1. Receive message from Slack
-    2. Check security FIRST via is_blocked() — Wi-Fi, injection attempts
-    3. If blocked, send firm refusal and STOP
-    4. If allowed, mask PII via clean_input()
-    5. Route to brain.py (Week 3)
+    2. Check if it's an IT security query via is_it_security_query() — if yes, respond immediately and STOP
+    3. Check security FIRST via is_blocked() — Wi-Fi, injection attempts
+    4. If blocked, send firm refusal and STOP
+    5. If allowed, mask PII via clean_input()
+    6. Route to brain.py (Week 3)
 
 Tech stack:
     - Slack Bolt for Python (Socket Mode)
@@ -34,6 +35,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 from dotenv import load_dotenv
+from src.it_security_handler import is_it_security_query
 from src.privacy_gate import clean_input, is_blocked, get_block_message
 from src.brain import respond, translate_text, filter_by_role, validate_role
 from src.tools.policy_handbook import query_handbook as query_policy_handbook
@@ -97,22 +99,31 @@ def process_query(raw_query, say, client, channel, user_id):
     Shared logic for DM messages and channel mentions.
  
     Flow:
-        1. Security check on raw text first (US-03)
-        2. PII masking
-        3. Conversation state — handle follow-up answers
-        4. Brain router
-        5. Reply to employee
+        1. IT security handler check on raw text first
+        2. Security check on raw text (US-03)
+        3. PII masking
+        4. Conversation state — handle follow-up answers
+        5. Brain router
+        6. Reply to employee
     """
-    # Step 1 — security check on raw text first
-    if is_blocked(raw_query):
+    # Step 1 — IT security handler (must run before privacy gate)
+    is_it_query, it_response = is_it_security_query(raw_query)
+    if is_it_query:
+        say(it_response)
+        return
+
+    # Step 2 — security check on raw text first
+    is_raw_blocked, _ = is_blocked(raw_query)
+    if is_raw_blocked:
         say(get_block_message(raw_query))
         return
  
-    # Step 2 — PII masking
+    # Step 3 — PII masking
     query = clean_input(raw_query)
     # Optional second safety check on masked text
     # This protects against any risky content that may still remain after masking
-    if is_blocked(query):
+    is_masked_blocked, _ = is_blocked(query)
+    if is_masked_blocked:
         say(get_block_message(query))
         return
 

@@ -98,6 +98,56 @@ SENSITIVE_KEYWORDS = [
 
 OMBUDSMAN_EMAIL = "ombudsman@greenleaf-safety.ch"
 
+SECTION_9_MINOR_QUOTE = (
+    '"Conflict: Employees should first attempt a \"Coffee Chat\" to resolve peer disputes."'
+)
+SECTION_9_SERIOUS_QUOTE = (
+    '"Serious Misconduct: Matters regarding harassment, bullying, or whistleblowing must be handled through the external Ombudsman to ensure anonymity."'
+)
+
+MINOR_CONFLICT_KEYWORDS = [
+    "conflict",
+    "disagreement",
+    "argument",
+    "peer dispute",
+    "problem with a colleague",
+    "team dispute",
+    "issue with coworker",
+]
+
+SERIOUS_CONFLICT_KEYWORDS = [
+    "harassment",
+    "harass",
+    "harassed",
+    "harassing",
+    "bullying",
+    "bully",
+    "bullied",
+    "whistleblowing",
+    "whistleblow",
+    "misconduct",
+    "abuse",
+    "threat",
+    "unsafe",
+    "unsafe workplace",
+    "discrimination",
+    "hostile workplace",
+]
+
+
+def classify_section_9_severity(text: str) -> str:
+    """
+    Classifies Section 9 conduct-related inquiries into either
+    'minor' or 'serious'. Defaults to serious when the message is ambiguous.
+    """
+    lowered = text.lower()
+
+    if any(keyword in lowered for keyword in SERIOUS_CONFLICT_KEYWORDS):
+        return "serious"
+    if any(keyword in lowered for keyword in MINOR_CONFLICT_KEYWORDS):
+        return "minor"
+    return "serious"
+
 
 # -------------------------------------------------
 # STEP 1 — LOAD ALL .md FILES FROM data/
@@ -321,19 +371,36 @@ def query_handbook(text: str) -> dict:
     - Office Etiquette
     - Kitchen rules
     - Conflict Resolution
+    - Section 9 conduct-related inquiries with fixed responses
     - Other internal handbook/data questions found in data/
     """
     try:
-        # First: redirect sensitive matters exactly as required
+        # First: redirect sensitive wellbeing matters with Section 9 fixed messaging.
         if is_sensitive_wellbeing_question(text):
+            severity = classify_section_9_severity(text)
+
+            if severity == "minor":
+                return {
+                    "answer": (
+                        "For normal workplace disagreements or peer conflicts that do not "
+                        "indicate harassment or unsafe conditions, please try a Coffee Chat "
+                        "first to resolve the issue."
+                    ),
+                    "source": (
+                        "GreenLeaf Handbook — Section 9: Conduct & Conflict Resolution; "
+                        f"{SECTION_9_MINOR_QUOTE}"
+                    )
+                }
+
             return {
                 "answer": (
-                    "For peers disputes or conflicts, employees should first attempt a "
-                    "'Coffee Chat' to resolve the issue. If the matter involves serious "
-                    "misconduct, harassment, bullying, or whistleblowing, please contact "
-                    f"the confidential ombudsman at {OMBUDSMAN_EMAIL}."
+                    "For serious conduct matters, harassment, bullying, or whistleblowing, "
+                    f"please contact the confidential ombudsman at {OMBUDSMAN_EMAIL}."
                 ),
-                "source": "GreenLeaf Handbook — Section 9: Sensitive Matters & Conduct"
+                "source": (
+                    "GreenLeaf Handbook — Section 9: Conduct & Conflict Resolution; "
+                    f"{SECTION_9_SERIOUS_QUOTE}"
+                )
             }
 
         # Retrieve relevant internal context
