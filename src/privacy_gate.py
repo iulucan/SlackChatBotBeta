@@ -265,7 +265,7 @@ PROTECTED_FROM_MASKING = {
     "is", "are", "the", "a", "an", "my", "your", "his", "her", "our",
     "how", "what", "when", "where", "why", "which", "swiss", "switzerland",
     "schweiz", "suisse", "svizzera", "day", "week", "month", "year",
-    "time", "date", "name", "email", "phone", "number", "good", "bad", "Jack Daniels", 
+    "time", "date", "name", "email", "phone", "number", "good", "bad",
 }
 
 # German common verbs/words that start with capital but aren't names
