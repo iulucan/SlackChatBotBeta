@@ -112,6 +112,27 @@ def process_query(raw_query, say, client, channel, user_id):
         say(it_response)
         return
 
+    # Step 1b — Greeting check
+    # Intercept simple greetings before they reach brain.py / ChromaDB.
+    # Without this, "hello" returns "Sorry, I could not find an answer."
+    GREETINGS = {
+        "hello", "hi", "hey", "yo",
+        "good morning", "good afternoon", "good evening",
+        "hallo", "guten tag", "guten morgen", "guten abend",
+        "bonjour", "bonsoir", "salut",
+        "ciao", "buongiorno", "buonasera",
+    }
+    if raw_query.strip().lower() in GREETINGS:
+        say(
+            "Hello! I'm the GreenLeaf HR Assistant. How can I help you today?\n\n"
+            "You can ask me about:\n"
+            "• *HR policies* — handbook, leave, expenses\n"
+            "• *Public holidays* — Swiss canton holidays\n"
+            "• *Expenses* — reimbursement rules and limits\n"
+            "• *IT support* — Wi-Fi, passwords, hardware"
+        )
+        return
+
     # Step 2 — security check on raw text first
     is_raw_blocked, _ = is_blocked(raw_query)
     if is_raw_blocked:
