@@ -150,7 +150,11 @@ def process_query(raw_query, say, client, channel, user_id):
 
     # --- NEW: IMMEDIATE ACKNOWLEDGMENT ---
     # We use langid because it is local and instant (<0.01s)
-    user_lang = detect_language2(query)
+    if user_id in conversation_state:
+        state = conversation_state[user_id]
+        user_lang = state.get("language", "en")
+    else:
+        user_lang = detect_language2(query)
 
     wait_messages = {
         "en": "I'm checking that for you, please give me a moment... :mag:",
@@ -166,6 +170,7 @@ def process_query(raw_query, say, client, channel, user_id):
             channel=channel,
             text=wait_text
         )
+            
         msg_ts = initial_response["ts"]
         # You can save this to reply in a thread later if you want:
         # thread_ts = initial_response["ts"]
@@ -243,7 +248,7 @@ def process_query(raw_query, say, client, channel, user_id):
         # Step 5 — handle clarification request
         if result.get("needs_clarification"):
             print(query)
-            conversation_state[user_id] = {"pending": result.get("original_english", query), "retries": 0}
+            conversation_state[user_id] = {"pending": result.get("original_english", query), "retries": 0, "language": user_lang}
             translated_question = translate_text(result["question"], user_lang, "en")
             client.chat_update(channel=channel, ts=msg_ts, text=translated_question)
             return
