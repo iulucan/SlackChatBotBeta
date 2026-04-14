@@ -1,16 +1,13 @@
 """
 GreenLeaf Logistics - Expense Validation Tool
 =============================================
-This module contains the business logic for expense validation.
+Reliability-first version.
 
-Design approach:
-- Use deterministic handbook rules first (amount limit, client presence, alcohol keywords)
-- Use fuzzy matching for common misspellings of alcohol words/brands
-- Use AI only as a backup semantic detector for suspicious alcohol mentions
-- Fail safely: if the case is ambiguous, do NOT auto-approve
-- Distinguish between:
-    1. expense policy questions
-    2. actual expense validation requests
+Design priorities:
+- Never auto-approve a suspicious beverage if alcohol cannot be ruled out safely
+- Deterministic rules first
+- AI used as a backup for ambiguous drink-like cases
+- Fail safe: ambiguous or unverified beverage cases go to manual review
 
 Handbook rules implemented:
 - Client lunches are reimbursable only if at least one external client is present
@@ -47,6 +44,14 @@ client = genai.Client(
 # CONFIGURATION
 # ─────────────────────────────────────────────
 
+SOURCE_LABEL = "GreenLeaf Handbook — Expense Policy"
+
+AMOUNT_RE = re.compile(
+    r"(\d+(?:\.\d+)?)\s*(?:chf|francs?|fr\.?)",
+    re.IGNORECASE
+)
+
+# Known alcohol words / brands / cocktails
 ALCOHOL_KEYWORDS = [
     "alcohol",
     "beer",
@@ -72,6 +77,24 @@ ALCOHOL_KEYWORDS = [
     "aperol",
     "campari",
     "martini",
+    "mojito",
+    "pina colada",
+    "piña colada",
+    "bloody mary",
+    "moscow mule",
+    "margarita",
+    "negroni",
+    "old fashioned",
+    "cosmopolitan",
+    "daiquiri",
+    "spritz",
+    "gin tonic",
+    "gin and tonic",
+    "cuba libre",
+    "b52",
+    "b-52",
+    "green mexican",
+    "green mexicain",
     "jack daniels",
     "jack daniel's",
     "jim beam",
@@ -96,14 +119,27 @@ ALCOHOL_KEYWORDS = [
     "rose wine",
 ]
 
+# Explicit non-alcoholic patterns
+NON_ALCOHOLIC_PATTERNS = [
+    "alcohol-free",
+    "alcohol free",
+    "non-alcoholic",
+    "non alcoholic",
+    "0.0%",
+    "0%",
+]
+
+# External party indicators
 CLIENT_KEYWORDS = [
     "client",
     "customer",
     "guest",
     "prospect",
-    "business partner"
+    "business partner",
+    "external client",
 ]
 
+# Policy-style questions
 POLICY_KEYWORDS = [
     "policy",
     "rule",
@@ -125,19 +161,8 @@ POLICY_KEYWORDS = [
     "what can be expensed"
 ]
 
-SUSPICIOUS_DRINK_WORDS = [
-    "drink",
-    "drank",
-    "bar",
-    "pub",
-    "bottle",
-    "glass",
-    "shot",
-    "aperitif",
-    "digestif"
-]
-
-MEAL_WORDS = {
+# Clear meal indicators
+SAFE_MEAL_WORDS = {
     "lunch",
     "dinner",
     "breakfast",
@@ -148,144 +173,36 @@ MEAL_WORDS = {
     "pasta",
     "burger",
     "snack",
-    "coffee"
+    "soup",
+    "rice",
+    "steak",
+    "fish",
+    "chicken",
+    "dessert"
 }
 
-SOURCE_LABEL = "GreenLeaf Handbook — Expense Policy"
-
-AMOUNT_RE = re.compile(
-    r"(\d+(?:\.\d+)?)\s*(?:chf|francs?|fr\.?)",
-    re.IGNORECASE
-)
+# General drink-like wording
+SUSPICIOUS_DRINK_WORDS = [
+    "drink",
+    "drank",
+    "bar",
+    "pub",
+    "bottle",
+    "glass",
+    "shot",
+    "cocktail",
+    "aperitif",
+    "digestif",
+]
 
 # ─────────────────────────────────────────────
 # HELPER FUNCTIONS
 # ─────────────────────────────────────────────
 
-def contains_alcohol_keywords(text: str) -> bool:
-    """
-    Deterministic alcohol detection.
-
-    Single-word keywords use word boundaries to reduce false positives.
-    Multi-word brands use substring matching.
-    """
-    text_lower = text.lower()
-
-    for keyword in ALCOHOL_KEYWORDS:
-        if " " in keyword:
-            if keyword in text_lower:
-                return True
-        else:
-            if re.search(rf"\b{re.escape(keyword)}\b", text_lower):
-                return True
-
-    return False
-
-
-def contains_fuzzy_alcohol_keywords(text: str) -> bool:
-    """
-    Detect likely misspellings of known alcohol words/brands.
-
-    Examples:
-    - guiness -> guinness
-    - martiny -> martini
-
-    Uses only single-word alcohol keywords.
-    """
-    words = re.findall(r"\b[\w'-]+\b", text.lower())
-    single_word_keywords = [kw for kw in ALCOHOL_KEYWORDS if " " not in kw]
-
-    for word in words:
-        match = get_close_matches(word, single_word_keywords, n=1, cutoff=0.88)
-        if match:
-            return True
-
-    return False
-
-
-def looks_alcohol_suspicious(text: str) -> bool:
-    """
-    Decide whether the text is suspicious enough to justify an AI alcohol audit.
-
-    This keeps the tool fast:
-    - obvious alcohol brands/keywords are handled deterministically
-    - AI is called only for ambiguous drink-like wording
-    """
-    text_lower = text.lower()
-    return any(word in text_lower for word in SUSPICIOUS_DRINK_WORDS)
-
-
-def looks_like_unknown_drink_phrase(text: str) -> bool:
-    """
-    Detect suspicious beverage-like phrasing such as:
-    - I had a Monkey Shoulder with a client
-    - I had an Obolon with customer
-    - I had a martiny with client
-
-    Used to trigger AI fallback when deterministic rules miss.
-    """
-    text_lower = text.lower()
-
-    suspicious_patterns = [
-        r"\bi had (?:a|an)\s+([a-zA-Z][a-zA-Z' -]{2,30})\s+with\s+(?:a\s+)?(?:client|customer|guest|prospect|business partner)\b",
-        r"\bi spent \d+(?:\.\d+)?\s*(?:chf|francs?|fr\.?)\s+on\s+([a-zA-Z][a-zA-Z' -]{2,30})\b",
-    ]
-
-    for pattern in suspicious_patterns:
-        match = re.search(pattern, text_lower)
-        if match:
-            phrase = match.group(1).strip()
-            if phrase not in MEAL_WORDS:
-                return True
-
-    return False
-
-
-@lru_cache(maxsize=256)
-def check_alcohol_with_ai(text: str):
-    """
-    Cached AI alcohol detector.
-
-    Return values:
-        True  -> alcohol detected
-        False -> no alcohol detected
-        None  -> AI service unavailable / failed
-    """
-    prompt = (
-        f"You are a strict expense auditor. Analyze this receipt text: '{text}'. "
-        "Does it mention any alcohol, beer, wine, spirits, liquor, whiskey, whisky, "
-        "vodka, cocktails, or alcohol brands? "
-        "Answer ONLY with the word 'YES' or 'NO'."
-    )
-
-    try:
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt
-        )
-
-        result = response.text.strip().upper()
-        print(f"DEBUG [AI Audit]: Alcohol detected? {result}")
-
-        return "YES" in result
-
-    except Exception as e:
-        print(f"CRITICAL AI ERROR: {e}")
-        return None
-
-
 def extract_amount(text: str):
     """
-    Extract CHF-like amount from the text.
-
-    Supported examples:
-    - 20 CHF
-    - 20 chf
-    - 20 francs
-    - 20 fr.
-
-    Returns:
-        float if found, otherwise None
+    Extract CHF-like amount from text.
+    Returns float if found, otherwise None.
     """
     match = AMOUNT_RE.search(text)
     return float(match.group(1)) if match else None
@@ -293,8 +210,8 @@ def extract_amount(text: str):
 
 def looks_like_policy_question(text: str) -> bool:
     """
-    Detect whether the user is asking about expense policy,
-    rather than asking to validate a specific expense claim.
+    Detect whether the user is asking about expense policy
+    instead of asking to validate a specific expense.
     """
     text_lower = text.lower()
     return any(keyword in text_lower for keyword in POLICY_KEYWORDS)
@@ -302,8 +219,7 @@ def looks_like_policy_question(text: str) -> bool:
 
 def answer_expense_policy(text: str) -> dict:
     """
-    Handles general expense-policy questions that do not need
-    approval/rejection logic.
+    Handles general expense policy questions.
     """
     text_lower = text.lower()
 
@@ -329,13 +245,7 @@ def answer_expense_policy(text: str) -> dict:
             "source": SOURCE_LABEL
         }
 
-    if (
-        "alcohol" in text_lower
-        or "wine" in text_lower
-        or "beer" in text_lower
-        or "whisky" in text_lower
-        or "whiskey" in text_lower
-    ):
+    if "alcohol" in text_lower:
         return {
             "answer": "Alcohol is strictly non-reimbursable under the GreenLeaf expense policy.",
             "source": SOURCE_LABEL
@@ -352,8 +262,8 @@ def answer_expense_policy(text: str) -> dict:
 
 def manual_review_response(reason: str) -> dict:
     """
-    Standard response for ambiguous cases where the tool cannot
-    safely auto-approve or auto-reject.
+    Standard response for ambiguous cases.
+    Reliability-first: ambiguous drink cases should never auto-approve.
     """
     return {
         "answer": (
@@ -364,53 +274,260 @@ def manual_review_response(reason: str) -> dict:
         "source": SOURCE_LABEL
     }
 
+
+def contains_non_alcoholic_pattern(text: str) -> bool:
+    """
+    Detect explicit non-alcoholic phrasing.
+    """
+    text_lower = text.lower()
+    return any(pattern in text_lower for pattern in NON_ALCOHOLIC_PATTERNS)
+
+
+def contains_alcohol_keywords(text: str) -> bool:
+    """
+    Deterministic alcohol detection.
+
+    Single-word keywords use word boundaries.
+    Multi-word phrases use substring matching.
+    """
+    text_lower = text.lower()
+
+    for keyword in ALCOHOL_KEYWORDS:
+        if " " in keyword:
+            if keyword in text_lower:
+                return True
+        else:
+            if re.search(rf"\b{re.escape(keyword)}\b", text_lower):
+                return True
+
+    return False
+
+
+def contains_fuzzy_alcohol_keywords(text: str) -> bool:
+    """
+    Detect likely misspellings of known alcohol words/brands.
+
+    Examples:
+    - guiness -> guinness
+    - martiny -> martini
+    """
+    words = re.findall(r"\b[\w'-]+\b", text.lower())
+    single_word_keywords = [kw for kw in ALCOHOL_KEYWORDS if " " not in kw]
+
+    for word in words:
+        match = get_close_matches(word, single_word_keywords, n=1, cutoff=0.88)
+        if match:
+            return True
+
+    return False
+
+
+def has_client_context(text: str) -> bool:
+    """
+    Check whether an external business contact is mentioned.
+    """
+    text_lower = text.lower()
+    return any(keyword in text_lower for keyword in CLIENT_KEYWORDS)
+
+
+def looks_alcohol_suspicious(text: str) -> bool:
+    """
+    Identify general drink-like wording that should trigger AI audit.
+    """
+    text_lower = text.lower()
+    return any(word in text_lower for word in SUSPICIOUS_DRINK_WORDS)
+
+
+def extract_named_item_phrase(text: str):
+    """
+    Extract a named consumable item from common expense phrasing.
+    Supports drinks/brands/cocktails, including alphanumeric names like B52.
+    """
+    text_lower = text.lower()
+
+    patterns = [
+        r"\bi had (?:a|an)\s+([a-zA-Z0-9][a-zA-Z0-9' -]{1,40})\s+with\s+(?:a\s+)?(?:external\s+)?(?:client|customer|guest|prospect|business partner)\b",
+        r"\bcan i expense (?:a|an)\s+([a-zA-Z0-9][a-zA-Z0-9' -]{1,40})\s+with\s+(?:a\s+)?(?:external\s+)?(?:client|customer|guest|prospect|business partner)\b",
+        r"\bi ordered (?:a|an)\s+([a-zA-Z0-9][a-zA-Z0-9' -]{1,40})\s+with\s+(?:a\s+)?(?:external\s+)?(?:client|customer|guest|prospect|business partner)\b",
+        r"\bi spent \d+(?:\.\d+)?\s*(?:chf|francs?|fr\.?)\s+on\s+([a-zA-Z0-9][a-zA-Z0-9' -]{1,40})\b",
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, text_lower)
+        if match:
+            return match.group(1).strip()
+
+    return None
+
+
+def is_safe_meal_phrase(phrase: str) -> bool:
+    """
+    Check whether the extracted phrase is clearly a meal item.
+    """
+    if not phrase:
+        return False
+
+    words = set(re.findall(r"\b[\w'-]+\b", phrase.lower()))
+    return bool(words & SAFE_MEAL_WORDS)
+
+
+def looks_like_ambiguous_drink_case(text: str) -> bool:
+    """
+    Reliability-first ambiguous case detector.
+
+    Returns True when:
+    - message has client context
+    - amount exists
+    - text appears to reference a named consumable item
+    - item is not clearly a safe meal
+    """
+    if extract_amount(text) is None:
+        return False
+
+    if not has_client_context(text):
+        return False
+
+    phrase = extract_named_item_phrase(text)
+    if not phrase:
+        return False
+
+    if is_safe_meal_phrase(phrase):
+        return False
+
+    return True
+
+
+def contains_meal_plus_drink_pattern(text: str) -> bool:
+    """
+    Detect patterns like:
+    - I had lunch with an external client with a B52 for 30 CHF
+    - I had dinner with a customer with a green mexicain for 30 CHF
+
+    If a meal is mentioned together with an additional named item after 'with a/an',
+    that item is treated as a suspicious drink candidate.
+    """
+    text_lower = text.lower()
+
+    meal_words = ["lunch", "dinner", "breakfast", "meal"]
+
+    if not any(meal in text_lower for meal in meal_words):
+        return False
+
+    pattern = (
+        r"\b(?:lunch|dinner|breakfast|meal)\b.*?"
+        r"\bwith\s+(?:an?\s+)?(?:external\s+)?(?:client|customer|guest|prospect|business partner)\b.*?"
+        r"\bwith\s+(?:a|an)\s+([a-zA-Z0-9][a-zA-Z0-9' -]{1,40})\b"
+    )
+
+    match = re.search(pattern, text_lower)
+    if not match:
+        return False
+
+    candidate = match.group(1).strip()
+    if candidate in SAFE_MEAL_WORDS:
+        return False
+
+    return True
+
+
+@lru_cache(maxsize=256)
+def check_alcohol_with_ai(text: str):
+    """
+    Cached AI alcohol detector.
+
+    Return values:
+        True  -> alcohol detected
+        False -> no alcohol detected
+        None  -> AI service unavailable or unclear result
+    """
+    prompt = (
+        f"You are a strict expense auditor. Analyze this expense text: '{text}'. "
+        "Decide whether the item mentioned is alcoholic. "
+        "Treat cocktails, spirits, wine, beer, liqueurs, and alcohol brands as alcoholic. "
+        "If the message is ambiguous or you are not sure, answer UNCLEAR. "
+        "Reply with exactly one word only: YES, NO, or UNCLEAR."
+    )
+
+    try:
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt
+        )
+
+        result = response.text.strip().upper()
+        print(f"DEBUG [AI Audit]: Alcohol detected? {result}")
+
+        if result == "YES":
+            return True
+        if result == "NO":
+            return False
+        return None
+
+    except Exception as e:
+        print(f"CRITICAL AI ERROR: {e}")
+        return None
+
 # ─────────────────────────────────────────────
-# MAIN FUNCTION (CALLED BY BRAIN)
+# MAIN FUNCTION
 # ─────────────────────────────────────────────
 
 def validate_expense(text: str) -> dict:
     """
     Main entry point for expense validation.
 
-    Flow:
-    1. Distinguish policy questions from validation requests
-    2. Extract amount from text
-    3. Detect alcohol (keyword → fuzzy → AI fallback only if suspicious)
-    4. Check client presence
-    5. Apply handbook rules
-    6. Return structured response
+    Reliability-first flow:
+    1. Policy question check
+    2. Amount extraction
+    3. Client context check
+    4. Explicit non-alcoholic patterns
+    5. Exact alcohol keywords
+    6. Fuzzy alcohol matching
+    7. AI audit for ambiguous drink-like cases
+    8. Manual review instead of approval when uncertainty remains
     """
     text_lower = text.lower()
 
-    # Step 0 — detect expense policy questions
+    # Step 0 — expense policy questions
     if looks_like_policy_question(text):
         return answer_expense_policy(text)
 
-    # Step 1 — extract amount
+    # Step 1 — amount extraction
     amount = extract_amount(text)
-
     if amount is None:
         return manual_review_response(
             "Could not detect the expense amount in CHF. "
             "Please include the amount, for example: 'Lunch with a client for 20 CHF'."
         )
 
-    # Step 2 — deterministic alcohol detection first
-    keyword_alcohol = contains_alcohol_keywords(text)
-    fuzzy_alcohol = contains_fuzzy_alcohol_keywords(text)
+    # Step 2 — client context
+    has_client = has_client_context(text)
 
-    # Step 3 — AI alcohol detection only when needed
+    # Step 3 — explicit non-alcoholic phrasing
+    explicit_non_alcoholic = contains_non_alcoholic_pattern(text)
+
+    # Step 4 — exact keyword alcohol detection
+    keyword_alcohol = False if explicit_non_alcoholic else contains_alcohol_keywords(text)
+
+    # Step 5 — fuzzy alcohol detection
+    fuzzy_alcohol = False
+    if not explicit_non_alcoholic and not keyword_alcohol:
+        fuzzy_alcohol = contains_fuzzy_alcohol_keywords(text)
+
+    # Step 6 — AI audit for ambiguous drink-like cases
     ai_alcohol = False
-    if not keyword_alcohol and not fuzzy_alcohol:
-        if looks_alcohol_suspicious(text) or looks_like_unknown_drink_phrase(text):
+    ai_checked = False
+    if not explicit_non_alcoholic and not keyword_alcohol and not fuzzy_alcohol:
+        if (
+            looks_alcohol_suspicious(text)
+            or looks_like_ambiguous_drink_case(text)
+            or contains_meal_plus_drink_pattern(text)
+        ):
+            ai_checked = True
             ai_alcohol = check_alcohol_with_ai(text)
 
     has_alcohol = keyword_alcohol or fuzzy_alcohol or (ai_alcohol is True)
 
-    # Step 4 — client / external business contact detection
-    has_client = any(keyword in text_lower for keyword in CLIENT_KEYWORDS)
-
-    # Step 5 — apply handbook rules
+    # Step 7 — apply handbook rules
     reasons = []
 
     if amount > 35:
@@ -423,17 +540,33 @@ def validate_expense(text: str) -> dict:
             reasons.append("Receipt likely contains alcohol (matched against known alcohol terms/brands)")
         else:
             reasons.append("Receipt contains alcohol (detected by AI audit)")
-    elif ai_alcohol is None:
-        return manual_review_response(
-            "Alcohol audit service is unavailable, so I cannot safely confirm whether the expense contains alcohol."
-        )
 
     if not has_client:
         reasons.append(
             "Expenses must be associated with an external client, customer, guest, prospect, or business partner"
         )
 
-    # Step 6 — final decision
+    # Reliability-first safety gate:
+    # If the message looks like a possible drink case and we still cannot safely classify it,
+    # do manual review instead of approval.
+    if not has_alcohol and has_client:
+        ambiguous_drink_case = (
+            looks_like_ambiguous_drink_case(text)
+            or contains_meal_plus_drink_pattern(text)
+        )
+
+        if ambiguous_drink_case:
+            if ai_checked and ai_alcohol is None:
+                return manual_review_response(
+                    "This appears to be a named beverage or drink-like item, but I could not safely determine whether it contains alcohol."
+                )
+
+            if not ai_checked:
+                return manual_review_response(
+                    "This appears to be a named beverage or drink-like item, and I cannot safely auto-approve it without confirming whether it contains alcohol."
+                )
+
+    # Step 8 — final decision
     if not reasons:
         return {
             "answer": "✅ Approved based on the provided information. Please submit the receipt via the ScanPro app.",
@@ -446,7 +579,7 @@ def validate_expense(text: str) -> dict:
         "answer": (
             f"❌ Rejected based on the provided information:\n"
             f"• {reason_str}\n\n"
-            "Please submit the receipt via the ScanPro app."
+            "Please submit receipts via the ScanPro app."
         ),
         "source": SOURCE_LABEL
     }
