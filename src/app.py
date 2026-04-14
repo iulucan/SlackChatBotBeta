@@ -123,14 +123,7 @@ def process_query(raw_query, say, client, channel, user_id):
         "ciao", "buongiorno", "buonasera",
     }
     if raw_query.strip().lower() in GREETINGS:
-        say(
-            "Hello! I'm the GreenLeaf HR Assistant. How can I help you today?\n\n"
-            "You can ask me about:\n"
-            "• *HR policies* — handbook, leave, expenses\n"
-            "• *Public holidays* — Swiss canton holidays\n"
-            "• *Expenses* — reimbursement rules and limits\n"
-            "• *IT support* — Wi-Fi, passwords, hardware"
-        )
+        say("Hello! I'm the GreenLeaf HR Assistant. How can I help you today?")
         return
 
     # Step 2 — security check on raw text first
