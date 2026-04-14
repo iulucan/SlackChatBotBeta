@@ -305,6 +305,10 @@ def handle_mention(event, say, client):
 def detect_language2(text: str) -> str:
     # .classify() returns a tuple: (language_code, confidence_score)
     lang, confidence = langid.classify(text)
+    print(f"[LANGID] Detected language: {lang} with confidence {confidence}")
+
+    if confidence > -10:
+        return "en"
         
     return lang
 
