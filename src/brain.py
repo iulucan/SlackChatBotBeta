@@ -29,9 +29,6 @@ from functools import lru_cache
 
 from dotenv import load_dotenv
 
-# Suppress verbose httpx request logs from Google GenAI SDK
-logging.getLogger("httpx").setLevel(logging.WARNING)
-
 # Add project root to Python path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -51,9 +48,7 @@ from src.tools.holiday_tool import SwissHolidayChecker
 # Load API key from .env
 load_dotenv()
 
-client = genai.Client(
-    api_key=os.getenv('GEMINI_API_KEY')
-)
+client = genai.Client(api_key=os.getenv('GEMINI_API_KEY'))
 
 # Valid intents
 VALID_INTENTS = ["policy", "holiday", "expense"]
@@ -79,6 +74,58 @@ VALID_CANTONS: Set[str] = {
     "GR", "JU", "LU", "NE", "NW", "OW", "SG", "SH", "SZ",
     "SO", "TG", "TI", "UR", "VD", "VS", "ZH", "ZG"
 }
+
+# This is the system prompt, defaults as None
+SYSTEM_PROMPT = None
+
+# Safely load the System Prompt at runtime
+def load_system_prompt():
+    """Loads the system instructions from the XML file safely."""
+    # Build absolute path to avoid working-directory issues
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    prompt_path = os.path.join(str(base_dir), "logic", "system_prompt.xml")
+
+    try:
+        with open(prompt_path, "r", encoding="utf-8") as file:
+            print("System Prompt loaded successfully.")
+            return file.read().strip()
+    except FileNotFoundError:
+        print("[CRITICAL] system_prompt.xml not found! Falling back to safe default.")
+        # Return a default but safe system prompt
+        return "You are a helpful HR assistant. Answer safely and concisely."
+
+# Initialize the System Prompt once and globally
+SYSTEM_PROMPT = load_system_prompt()
+
+# Configure the model parameters, system prompt, and AFC calling as disabled
+config_standard_AFC = types.GenerateContentConfig(
+    system_instruction=SYSTEM_PROMPT,
+    # Low temperature is crucial for RAG/Fact-based bots to reduce hallucinations (LLM09)
+    temperature=0.1,
+    # Hard limit on output tokens to prevent DoS via massive text generation (LLM10)
+    max_output_tokens=600,
+    automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True)
+)
+
+# Using types.Schema to properly trigger the 'parsed' object in google.genai
+extraction_schema = types.Schema(type=types.Type.OBJECT,
+                                 properties={
+                                     "date": types.Schema(type=types.Type.STRING, description="YYYY-MM-DD format"),
+                                     "canton": types.Schema(type=types.Type.STRING, description="2-letter Canton code")
+                                 },
+                                 required=["date", "canton"])
+
+# Configure the model parameters, system prompt, AFC calling as disabled, and JSON response schema
+config_standard_AFC_JSON = types.GenerateContentConfig(
+    system_instruction=SYSTEM_PROMPT,
+    # Low temperature is crucial for RAG/Fact-based bots to reduce hallucinations (LLM09)
+    temperature=0.1,
+    # Hard limit on output tokens to prevent DoS via massive text generation (LLM10)
+    max_output_tokens=600,
+    automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+    response_mime_type='application/json',
+    response_schema=extraction_schema,
+)
 
 # Helper function for tenacity to check if the error is a 503/429 (ServiceUnavailable/ResourceExhausted)
 def is_retryable_error(exception: BaseException) -> bool:
@@ -150,7 +197,7 @@ Do not explain. Do not add punctuation. Just one word.
         response = generate_with_backoff(
             prompt_entered=prompt,
             model_name="gemini-2.5-flash-lite",
-            config_type=types.GenerateContentConfig(automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True))
+            config_type=config_standard_AFC
         )
         intent = response.text.strip().lower()
 
@@ -200,7 +247,7 @@ Reply with only: policy_handbook or policy_wellbeing
         response = generate_with_backoff(
             prompt_entered=prompt,
             model_name="gemini-2.5-flash-lite",
-            config_type=types.GenerateContentConfig(automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True))
+            config_type=config_standard_AFC
         )
         result = response.text.strip().lower()
         if result not in ["policy_handbook", "policy_wellbeing"]:
@@ -241,7 +288,7 @@ Reply with only YES or NO.
         response = generate_with_backoff(
             prompt_entered=prompt,
             model_name="gemini-2.5-flash",
-            config_type=types.GenerateContentConfig(automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True))
+            config_type=config_standard_AFC
         )
         result = response.text.strip().upper()
         print(f"[BRAIN] Needs role clarification: {result}")
@@ -280,7 +327,7 @@ Reply with only one word: bereavement, safety, or other.
         response = generate_with_backoff(
             prompt_entered=prompt,
             model_name="gemini-2.5-flash-lite",
-            config_type=types.GenerateContentConfig(automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True))
+            config_type=config_standard_AFC
         )
         result = response.text.strip().lower()
         if result not in ["bereavement", "safety", "other"]:
@@ -317,7 +364,7 @@ Reply with only YES or NO.
         response = generate_with_backoff(
             prompt_entered=prompt,
             model_name="gemini-2.5-flash-lite",
-            config_type=types.GenerateContentConfig(automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True))
+            config_type=config_standard_AFC
         )
         result = response.text.strip().upper()
         print(f"[BRAIN] Role validated: {result}")
@@ -351,7 +398,7 @@ Extract the information relevant to this employee's role.
         response = generate_with_backoff(
             prompt_entered=prompt,
             model_name="gemini-2.5-flash-lite",
-            config_type=types.GenerateContentConfig(automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True))
+            config_type=config_standard_AFC
         )
         return response.text.strip()
     except Exception as e:
@@ -435,10 +482,7 @@ def dispatch(intent: str, text: str) -> dict:
             extraction_response = generate_with_backoff(
                 prompt_entered=extraction_prompt,
                 model_name="gemini-2.5-flash",
-                config_type=types.GenerateContentConfig(
-                    response_mime_type='application/json',
-                    response_schema=extraction_schema,
-                    automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True))
+                config_type=config_standard_AFC_JSON
             )
 
             # Safely access the natively parsed object (solves parsed=None issue)
@@ -601,7 +645,7 @@ Reply with **only** the translated text. Nothing else.
         response = generate_with_backoff(
             prompt_entered=prompt,
             model_name="gemini-2.5-flash",
-            config_type=types.GenerateContentConfig(automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True))
+            config_type=config_standard_AFC
         )
         translated = response.text.strip()
 
