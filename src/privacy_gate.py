@@ -268,6 +268,9 @@ PROTECTED_FROM_MASKING = {
     "time", "date", "name", "email", "phone", "number", "good", "bad",
 }
 
+# Normalized lowercase view used by matching logic.
+PROTECTED_FROM_MASKING_LOWER = {term.lower() for term in PROTECTED_FROM_MASKING}
+
 # German common verbs/words that start with capital but aren't names
 GERMAN_EXCLUDED_STARTS = {
     "kann", "könnte", "muss", "musste", "will", "werde", "würde", "habe", "hatte",
@@ -327,7 +330,7 @@ def _filter_false_positives(
         matched_lower = matched_text.lower().strip()
         
         # Rule 1: Never mask things in PROTECTED_FROM_MASKING
-        if matched_lower in PROTECTED_FROM_MASKING:
+        if matched_lower in PROTECTED_FROM_MASKING_LOWER:
             continue
         
         # Rule 2: If it's a 6-digit ID, be very careful
@@ -406,7 +409,7 @@ def _detect_names_with_keywords(text: str, language: str = "en") -> List[Tuple[i
         name = match.group(1)
         
         # Skip if it's a known false positive
-        if name.lower() in PROTECTED_FROM_MASKING:
+        if name.lower() in PROTECTED_FROM_MASKING_LOWER:
             continue
         
         # Skip very short names (single letter)
@@ -439,7 +442,7 @@ def _detect_capitalized_pairs(text: str, language: str = "en") -> List[Tuple[int
     )
     
     # Get excluded words for this language
-    excluded = PROTECTED_FROM_MASKING.copy()
+    excluded = set(PROTECTED_FROM_MASKING_LOWER)
     if language == "de":
         excluded.update(GERMAN_EXCLUDED_STARTS)
     elif language == "fr":
@@ -457,13 +460,22 @@ def _detect_capitalized_pairs(text: str, language: str = "en") -> List[Tuple[int
     for match in pattern.finditer(text):
         first = match.group(1).lower()
         second = match.group(2).lower()
+        full_pair = f"{first} {second}"
+        full_pair_plural = f"{first} {second}s"
+        full_pair_possessive = f"{first} {second}'s"
     
         # Skip if first word is a location prefix OR second word is a known city
         if first in location_prefixes or second in location_prefixes:
             continue
     
         # Skip if either word is excluded
-        if first in excluded or second in excluded:
+        if (
+            first in excluded
+            or second in excluded
+            or full_pair in excluded
+            or full_pair_plural in excluded
+            or full_pair_possessive in excluded
+        ):
             continue
     
         # Skip if either word is very short
@@ -510,7 +522,7 @@ def _detect_single_names(text: str, language: str = "en") -> List[Tuple[int, int
     # Single capitalized word (but be very selective)
     pattern = re.compile(r'\b([A-ZÄÖÜÀÂÄÉÈÊËÏÎÔÖÙÛÜŒÆ][a-zäöüàâäéèêëïîôöùûüœæ]{2,})\b')
     
-    excluded = PROTECTED_FROM_MASKING.copy()
+    excluded = set(PROTECTED_FROM_MASKING_LOWER)
     if language == "de":
         excluded.update(GERMAN_EXCLUDED_STARTS)
     elif language == "fr":
@@ -531,6 +543,20 @@ def _detect_single_names(text: str, language: str = "en") -> List[Tuple[int, int
         # Look at the word before and after
         start_pos = match.start()
         end_pos = match.end()
+
+        # If this token is part of a protected two-word phrase (e.g. Jack Daniel's),
+        # do not mask it as a standalone name.
+        next_word_match = re.match(
+            r"\s+([A-Za-zÄÖÜÀÂÄÉÈÊËÏÎÔÖÙÛÜŒÆäöüàâäéèêëïîôöùûüœæ]+)",
+            text[end_pos:]
+        )
+        if next_word_match:
+            next_word = next_word_match.group(1).lower()
+            pair = f"{word} {next_word}"
+            pair_plural = f"{word} {next_word}s"
+            pair_possessive = f"{word} {next_word}'s"
+            if pair in excluded or pair_plural in excluded or pair_possessive in excluded:
+                continue
         
         context_before = text[max(0, start_pos-20):start_pos].lower()
         context_after = text[end_pos:min(len(text), end_pos+20)].lower()
