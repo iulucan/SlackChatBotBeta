@@ -8,10 +8,11 @@ Architecture (HLD):
 
 Message flow (US-03 UPDATED):
     1. Receive message from Slack
-    2. Check security FIRST via is_blocked() — Wi-Fi, injection attempts
-    3. If blocked, send firm refusal and STOP
-    4. If allowed, mask PII via clean_input()
-    5. Route to brain.py (Week 3)
+    2. Check if it's an IT security query via is_it_security_query() — if yes, respond immediately and STOP
+    3. Check security FIRST via is_blocked() — Wi-Fi, injection attempts
+    4. If blocked, send firm refusal and STOP
+    5. If allowed, mask PII via clean_input()
+    6. Route to brain.py (Week 3)
 
 Tech stack:
     - Slack Bolt for Python (Socket Mode)

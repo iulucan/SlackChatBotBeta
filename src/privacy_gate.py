@@ -14,11 +14,8 @@ Owner: You (System Architect)
 Built: 2025 - Production Ready
 """
 
-from ast import pattern
-from ast import pattern
-from pydoc import text
 import re
-from typing import Dict, List, Tuple, Set
+from typing import List, Tuple
 from enum import Enum
 
 # =============================================================================
@@ -36,15 +33,14 @@ class BlockReason(Enum):
 # Keywords that trigger automatic blocking (case-insensitive)
 BLOCKED_KEYWORDS = {
     # IT / Network Security
-    "wifi", "wi-fi", "mac address", "ssid", "network", "vpn", "ssh",
+    "wifi", "wi-fi", "mac address", "ssid", "network access", "vpn", "ssh",
     "credential", "api key", "api_key", "token", "authentication", "authorized",
     "secret", "private key", "access key",
     # German IT
     "passwort", "netzwerk", "authentifizierung", "berechtigung", "zugangscode",
     "geheimnis", "privater schlüssel",
     # French IT
-    "mot de passe", "réseau", "authentification", "autorisation", "code d'accès",
-    "secret", "clé privée",
+    "mot de passe", "réseau", "authentification", "autorisation", "code d'accès", "clé privée",
     # Italian IT
     "password", "rete", "autenticazione", "autorizzazione", "codice di accesso",
     "segreto", "chiave privata",
