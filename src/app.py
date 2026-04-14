@@ -116,14 +116,21 @@ def process_query(raw_query, say, client, channel, user_id):
     # Intercept simple greetings before they reach brain.py / ChromaDB.
     # Without this, "hello" returns "Sorry, I could not find an answer."
     GREETINGS = {
-        "hello", "hi", "hey", "yo",
-        "good morning", "good afternoon", "good evening",
-        "hallo", "guten tag", "guten morgen", "guten abend",
-        "bonjour", "bonsoir", "salut",
-        "ciao", "buongiorno", "buonasera",
+        "hello": "en", "hi": "en", "hey": "en", "yo": "en",
+        "good morning": "en", "good afternoon": "en", "good evening": "en",
+        "hallo": "de", "guten tag": "de", "guten morgen": "de", "guten abend": "de",
+        "bonjour": "fr", "bonsoir": "fr", "salut": "fr",
+        "ciao": "it", "buongiorno": "it", "buonasera": "it",
     }
-    if raw_query.strip().lower() in GREETINGS:
-        say("Hello! I'm the GreenLeaf HR Assistant. How can I help you today?")
+    GREETING_RESPONSES = {
+        "en": "Hello! I'm the GreenLeaf HR Assistant. How can I help you today?",
+        "de": "Hallo! Ich bin der GreenLeaf HR-Assistent. Wie kann ich Ihnen heute helfen?",
+        "fr": "Bonjour! Je suis l'assistant RH GreenLeaf. Comment puis-je vous aider aujourd'hui?",
+        "it": "Ciao! Sono l'assistente HR di GreenLeaf. Come posso aiutarti oggi?",
+    }
+    greeting_lang = GREETINGS.get(raw_query.strip().lower())
+    if greeting_lang:
+        say(GREETING_RESPONSES[greeting_lang])
         return
 
     # Step 2 — security check on raw text first
