@@ -25,6 +25,7 @@ Update: US-03 Security Hardening Done by Samim (Developer)"""
 import os
 import sys
 import re
+import time
 from difflib import get_close_matches
 
 # Add project root to Python path so imports work correctly
@@ -43,6 +44,15 @@ load_dotenv()
 
 # Initialize Slack app with bot token
 app = App(token=os.environ["SLACK_BOT_TOKEN"])
+
+# Set DEBUG_MODE=true in Render env vars to show tool/PII/latency in Slack
+DEBUG_MODE = os.environ.get("DEBUG_MODE", "false").lower() == "true"
+TOOL_LABELS = {
+    "policy_tool":  "RAG (ChromaDB / FAISS)",
+    "holiday_tool": "API (OpenHolidays)",
+    "expense_tool": "Logic (Rules Engine)",
+    "unknown":      "Unknown",
+}
 
 conversation_state = {}
 
@@ -99,6 +109,8 @@ def process_query(raw_query, say, user_id):
         5. Brain router
         6. Reply to employee
     """
+    t_start = time.time()
+
     # Step 1 — IT security handler (must run before privacy gate)
     is_it_query, it_response = is_it_security_query(raw_query)
     if is_it_query:
@@ -113,6 +125,7 @@ def process_query(raw_query, say, user_id):
  
     # Step 3 — PII masking
     query = clean_input(raw_query)
+    pii_masked = query != raw_query
     # Optional second safety check on masked text
     # This protects against any risky content that may still remain after masking
     is_masked_blocked, _ = is_blocked(query)
@@ -205,6 +218,12 @@ def process_query(raw_query, say, user_id):
  
     # Step 8 — send answer
     say(f"{result['answer']}\n\n_Source: {result['source']}_")
+
+    if DEBUG_MODE:
+        pii_flag = "🔒 PII masked  |  " if pii_masked else ""
+        tool_label = TOOL_LABELS.get(tool_used, tool_used)
+        elapsed = round(time.time() - t_start, 2)
+        say(f"```[DEBUG]  {pii_flag}🛠 Tool: {tool_label}  |  ⏱ {elapsed}s```")
 
 
 @app.message("")
