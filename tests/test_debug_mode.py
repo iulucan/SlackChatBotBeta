@@ -8,6 +8,10 @@ Run: python tests/test_debug_mode.py
 import os
 import sys
 import time
+import logging
+
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -16,6 +20,7 @@ load_dotenv()
 
 from src.privacy_gate import clean_input, is_blocked, get_block_message
 from src.brain import respond
+from src.it_security_handler import is_it_security_query
 
 DEBUG_MODE = os.environ.get("DEBUG_MODE", "false").lower() == "true"
 TOOL_LABELS = {
@@ -42,14 +47,22 @@ def emulate(raw_query):
 
     t_start = time.time()
 
-    if is_blocked(raw_query):
+    # IT security handler — runs before privacy gate
+    is_it, it_response = is_it_security_query(raw_query)
+    if is_it:
+        say(it_response)
+        return
+
+    is_raw_blocked, _ = is_blocked(raw_query)
+    if is_raw_blocked:
         say(get_block_message(raw_query))
         return
 
     query = clean_input(raw_query)
     pii_masked = query != raw_query
 
-    if is_blocked(query):
+    is_masked_blocked, _ = is_blocked(query)
+    if is_masked_blocked:
         say(get_block_message(query))
         return
 
