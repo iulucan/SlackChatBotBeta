@@ -22,7 +22,9 @@ from typing import List, Tuple
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from dotenv import load_dotenv
-import google.generativeai as genai
+from google import genai
+from google.genai import types
+from tenacity import retry, stop_after_attempt, wait_exponential_jitter, retry_if_exception
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
@@ -34,8 +36,34 @@ from langchain_google_genai import GoogleGenerativeAIEmbeddings
 
 load_dotenv()
 
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-model = genai.GenerativeModel("gemini-2.5-flash")
+client = genai.Client(api_key=os.getenv('GEMINI_API_KEY'))
+
+# Helper function for tenacity to check if the error is a 503/429 (ServiceUnavailable/ResourceExhausted)
+def is_retryable_error(exception: BaseException) -> bool:
+    error_str = str(exception)
+    class_name = exception.__class__.__name__
+    return (any(err in error_str for err in ["503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED", "ServerError"])
+            or class_name in ["ServerError", "ServiceUnavailable", "ResourceExhausted", "APIError"])
+
+@retry(
+    retry=retry_if_exception(is_retryable_error),
+    stop=stop_after_attempt(8),
+    wait=wait_exponential_jitter(initial=1, max=30),
+    before_sleep=lambda rs: print(f"[BRAIN] Capacity issue. Retrying... (Attempt {rs.attempt_number})"),
+    reraise=True # Crucial fix: Forces Tenacity to raise the actual APIError instead of RetryError
+)
+def generate_with_backoff(model_name, prompt_entered, config_type):
+    """
+    Calls Gemini with automatic exponential backoff on 503/429 errors handled by Tenacity
+    Error code 503 is for ServiceUnavailable/ResourceExhausted
+    Error code 429 is for ResourceExhausted
+    """
+    response = client.models.generate_content(
+        model=model_name,
+        contents=prompt_entered,
+        config=config_type
+    )
+    return response
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DATA_DIR = os.path.join(BASE_DIR, "data")
@@ -69,6 +97,56 @@ SENSITIVE_KEYWORDS = [
 ]
 
 OMBUDSMAN_EMAIL = "ombudsman@greenleaf-safety.ch"
+
+SECTION_9_MINOR_QUOTE = (
+    '"Conflict: Employees should first attempt a \"Coffee Chat\" to resolve peer disputes."'
+)
+SECTION_9_SERIOUS_QUOTE = (
+    '"Serious Misconduct: Matters regarding harassment, bullying, or whistleblowing must be handled through the external Ombudsman to ensure anonymity."'
+)
+
+MINOR_CONFLICT_KEYWORDS = [
+    "conflict",
+    "disagreement",
+    "argument",
+    "peer dispute",
+    "problem with a colleague",
+    "team dispute",
+    "issue with coworker",
+]
+
+SERIOUS_CONFLICT_KEYWORDS = [
+    "harassment",
+    "harass",
+    "harassed",
+    "harassing",
+    "bullying",
+    "bully",
+    "bullied",
+    "whistleblowing",
+    "whistleblow",
+    "misconduct",
+    "abuse",
+    "threat",
+    "unsafe",
+    "unsafe workplace",
+    "discrimination",
+    "hostile workplace",
+]
+
+
+def classify_section_9_severity(text: str) -> str:
+    """
+    Classifies Section 9 conduct-related inquiries into either
+    'minor' or 'serious'. Defaults to serious when the message is ambiguous.
+    """
+    lowered = text.lower()
+
+    if any(keyword in lowered for keyword in SERIOUS_CONFLICT_KEYWORDS):
+        return "serious"
+    if any(keyword in lowered for keyword in MINOR_CONFLICT_KEYWORDS):
+        return "minor"
+    return "serious"
 
 
 # -------------------------------------------------
@@ -271,7 +349,11 @@ QUESTION:
 CONTEXT:
 {context}
 """
-    response = model.generate_content(prompt)
+    response = generate_with_backoff(
+            prompt_entered=prompt,
+            model_name="gemini-2.5-flash",
+            config_type=types.GenerateContentConfig(automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True))
+    )
     return response.text.strip()
 
 
@@ -289,19 +371,36 @@ def query_handbook(text: str) -> dict:
     - Office Etiquette
     - Kitchen rules
     - Conflict Resolution
+    - Section 9 conduct-related inquiries with fixed responses
     - Other internal handbook/data questions found in data/
     """
     try:
-        # First: redirect sensitive matters exactly as required
+        # First: redirect sensitive wellbeing matters with Section 9 fixed messaging.
         if is_sensitive_wellbeing_question(text):
+            severity = classify_section_9_severity(text)
+
+            if severity == "minor":
+                return {
+                    "answer": (
+                        "For normal workplace disagreements or peer conflicts that do not "
+                        "indicate harassment or unsafe conditions, please try a Coffee Chat "
+                        "first to resolve the issue."
+                    ),
+                    "source": (
+                        "GreenLeaf Handbook — Section 9: Conduct & Conflict Resolution; "
+                        f"{SECTION_9_MINOR_QUOTE}"
+                    )
+                }
+
             return {
                 "answer": (
-                    "For peers disputes or conflicts, employees should first attempt a "
-                    "'Coffee Chat' to resolve the issue. If the matter involves serious "
-                    "misconduct, harassment, bullying, or whistleblowing, please contact "
-                    f"the confidential ombudsman at {OMBUDSMAN_EMAIL}."
+                    "For serious conduct matters, harassment, bullying, or whistleblowing, "
+                    f"please contact the confidential ombudsman at {OMBUDSMAN_EMAIL}."
                 ),
-                "source": "GreenLeaf Handbook — Section 9: Sensitive Matters & Conduct"
+                "source": (
+                    "GreenLeaf Handbook — Section 9: Conduct & Conflict Resolution; "
+                    f"{SECTION_9_SERIOUS_QUOTE}"
+                )
             }
 
         # Retrieve relevant internal context
