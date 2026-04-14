@@ -242,7 +242,9 @@ PROTECTED_FROM_MASKING = {
     "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
     "montag", "dienstag", "mittwoch", "donnerstag", "freitag", "samstag", "sonntag",
     "lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche",
-    "lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato", "domenica",
+    "lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato", "domenica", "Jack Daniels","Jack Daniel's", "Johnny Walker", "Chivas Regal", 
+    "Monkey Shoulder", "Pina Colada", "Piña Colada", "Bloody Mary", "Moscow Mule", "Mojito", "B52", "B-52", "Green Mexican", "Green Mexicain",
+    "Martini", "Margarita", "Negroni", "Cosmopolitan", "Daiquiri", "Gin Tonic", "Gin and Tonic", "Cuba Libre",
     
     # Special holidays (don't mask these)
     "good friday", "easter monday", "boxing day", "whit monday", "christmas", "new year",
@@ -263,7 +265,7 @@ PROTECTED_FROM_MASKING = {
     "is", "are", "the", "a", "an", "my", "your", "his", "her", "our",
     "how", "what", "when", "where", "why", "which", "swiss", "switzerland",
     "schweiz", "suisse", "svizzera", "day", "week", "month", "year",
-    "time", "date", "name", "email", "phone", "number", "good", "bad",
+    "time", "date", "name", "email", "phone", "number", "good", "bad", "Jack Daniels", 
 }
 
 # German common verbs/words that start with capital but aren't names
