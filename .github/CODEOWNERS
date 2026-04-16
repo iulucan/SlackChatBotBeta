@@ -1,0 +1,2 @@
+# Prevent any unauthorized modification of the system prompt in the .XML file
+/logic/system_prompt.xml    @YehyaBELHAMRA @alekseimironov @codibrahim
