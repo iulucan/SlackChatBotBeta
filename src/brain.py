@@ -411,7 +411,7 @@ Extract the information relevant to this employee's role.
 # TOOL DISPATCH
 # ─────────────────────────────────────────────
 
-def dispatch(intent: str, text: str) -> dict:
+def dispatch(intent: str, text: str, user_lang: str = "en") -> dict:
 
     if intent == "policy":
         # Deterministic pre-check — route without asking Gemini to avoid misclassification
@@ -451,7 +451,7 @@ def dispatch(intent: str, text: str) -> dict:
 
     elif intent == "holiday":
         text_lower_check = text.lower()
-        detected_language = detect_language(text_lower_check)
+        detected_language = user_lang
 
         # 1. Use Gemini to detect the date and Canton via Structured JSON Output
         extraction_prompt = f"""
@@ -564,22 +564,31 @@ def respond(text_in_english: str, user_lang: str) -> tuple:
         t0 = time.time()
 
         # Step 1: Classify intent
-        t2 = time.time()
+        t1 = time.time()
         intent = classify_intent(text_in_english)
-        print(f"[BRAIN] Step 3 classify_intent: {round(time.time() - t2, 2)}s")
+        print(f"[BRAIN] Step 1 classify_intent: {round(time.time() - t1, 2)}s")
 
         # Step 2: Dispatch
-        t3 = time.time()
-        result = dispatch(intent, text_in_english)
-        print(f"[BRAIN] Step 4 dispatch: {round(time.time() - t3, 2)}s")
+        t2 = time.time()
+        result = dispatch(intent, text_in_english, user_lang)
+        print(f"[BRAIN] Step 2 dispatch: {round(time.time() - t2, 2)}s")
 
         # Step 3: Convert answer back to user's language if needed
-        t4 = time.time()
+        t3 = time.time()
         if "answer" in result:
             result["answer"] = translate_text(result["answer"], user_lang, "en")
-        print(f"[BRAIN] Step 5 translate_answer: {round(time.time() - t4, 2)}s")
+        t_translate = round(time.time() - t3, 2)
+        print(f"[BRAIN] Step 3 translate_answer: {t_translate}s")
 
-        print(f"[BRAIN] Total response time: {round(time.time() - t0, 2)}s")
+        t_total = round(time.time() - t0, 2)
+        print(f"[BRAIN] Total response time: {t_total}s")
+
+        result["timings"] = {
+            "classify": round(t2 - t1, 2),
+            "dispatch": round(t3 - t2, 2),
+            "translate": t_translate,
+            "total": t_total,
+        }
 
         tool_used = f"{intent}_tool"
         return result, tool_used

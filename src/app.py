@@ -117,7 +117,18 @@ def process_query(raw_query, say, client, channel, user_id):
     """
     t_start = time.time()
 
+    # Detect debug flag — READ ONLY, raw_query not modified yet
+    if "--debug/extended" in raw_query:
+        debug_level = "extended"
+    elif "--debug/compact" in raw_query:
+        debug_level = "compact"
+    elif DEBUG_MODE:
+        debug_level = "compact"
+    else:
+        debug_level = None
+
     # Step 1 — IT security handler (must run before privacy gate)
+    # Security checks see the FULL original query including any debug flag
     is_it_query, it_response = is_it_security_query(raw_query)
     if is_it_query:
         say(it_response)
@@ -149,10 +160,13 @@ def process_query(raw_query, say, client, channel, user_id):
     if is_raw_blocked:
         say(get_block_message(raw_query))
         return
- 
+
+    # Strip debug flag only after security checks have passed
+    if debug_level in ("compact", "extended"):
+        raw_query = raw_query.replace("--debug/extended", "").replace("--debug/compact", "").strip()
+
     # Step 3 — PII masking
     query = clean_input(raw_query)
-    pii_masked = query != raw_query
     # Optional second safety check on masked text
     # This protects against any risky content that may still remain after masking
     is_masked_blocked, _ = is_blocked(query)
@@ -201,6 +215,9 @@ def process_query(raw_query, say, client, channel, user_id):
             # Support both old plain string and new dict structure
             pending = state["pending"] if isinstance(state, dict) else state
             retries = state.get("retries", 0) if isinstance(state, dict) else 0
+            # Restore debug_level from original message if not set in current message
+            if debug_level is None:
+                debug_level = state.get("debug_level") if isinstance(state, dict) else None
             # Translate follow-up to English and call dispatch directly
             # bypassing respond() to avoid re-classification loop
 
@@ -220,7 +237,7 @@ def process_query(raw_query, say, client, channel, user_id):
                     )
                     client.chat_update(channel=channel, ts=msg_ts, text=give_up_msg)
                     return
-                conversation_state[user_id] = {"pending": pending, "retries": retries}
+                conversation_state[user_id] = {"pending": pending, "retries": retries, "debug_level": debug_level}
                 retry_msg = translate_text(
                     "I didn't catch that — could you rephrase? Please reply with one of:\n• Warehouse staff\n• Customer support\n• General office staff",
                     user_lang, "en"
@@ -237,7 +254,7 @@ def process_query(raw_query, say, client, channel, user_id):
             print(f"[APP] Follow-up query_handbook: {round(time.time() - t_handbook, 2)}s")
 
             if "error" in handbook_result:
-                conversation_state[user_id] = {"pending": pending, "retries": retries}
+                conversation_state[user_id] = {"pending": pending, "retries": retries, "debug_level": debug_level}
                 retry_msg = translate_text(
                     "I didn't catch that — could you rephrase? Please reply with one of:\n• Warehouse staff\n• Customer support\n• General office staff",
                     user_lang, "en"
@@ -249,9 +266,31 @@ def process_query(raw_query, say, client, channel, user_id):
             answer = filter_by_role(combined, handbook_result["answer"])
             print(f"[APP] Follow-up filter_by_role: {round(time.time() - t_filter, 2)}s")
 
+            t_translate_followup = time.time()
             answer = translate_text(answer, user_lang, "en")
-            print(f"[APP] Follow-up total: {round(time.time() - t_followup, 2)}s")
-            client.chat_update(channel=channel, ts=msg_ts, text=f"{answer}\n\n_Source: {handbook_result['source']}_")
+            t_translate_done = round(time.time() - t_translate_followup, 2)
+            elapsed_followup = round(time.time() - t_followup, 2)
+            print(f"[APP] Follow-up total: {elapsed_followup}s")
+            final_text = f"{answer}\n\n_Source: {handbook_result['source']}_"
+            if debug_level == "compact":
+                tool_label = TOOL_LABELS.get("policy_tool", "RAG (ChromaDB / FAISS)")
+                elapsed = round(time.time() - t_start, 2)
+                pii_flag = "🔒 PII masked  |  " if query != raw_query else ""
+                final_text += f"\n\n```[DEBUG]  {pii_flag}🛠 Tool: {tool_label}  |  ⏱ {elapsed}s```"
+            elif debug_level == "extended":
+                tool_label = TOOL_LABELS.get("policy_tool", "RAG (ChromaDB / FAISS)")
+                elapsed = round(time.time() - t_start, 2)
+                t_role_done = round(time.time() - t_role, 2)
+                t_handbook_done = round(time.time() - t_handbook, 2)
+                final_text += (
+                    f"\n\n```[DEBUG EXTENDED]"
+                    f"\n  Role validation:   {t_role_done}s"
+                    f"\n  RAG lookup:        {t_handbook_done}s"
+                    f"\n  Translate answer:  {t_translate_done}s"
+                    f"\n  ─────────────────────────"
+                    f"\n  Total:             {elapsed}s  |  🛠 {tool_label}```"
+                )
+            client.chat_update(channel=channel, ts=msg_ts, text=final_text)
             return
  
         # Step 4 — brain router
@@ -260,7 +299,7 @@ def process_query(raw_query, say, client, channel, user_id):
         # Step 5 — handle clarification request
         if result.get("needs_clarification"):
             print(query)
-            conversation_state[user_id] = {"pending": result.get("original_english", query), "retries": 0, "language": user_lang}
+            conversation_state[user_id] = {"pending": result.get("original_english", query), "retries": 0, "language": user_lang, "debug_level": debug_level}
             translated_question = translate_text(result["question"], user_lang, "en")
             client.chat_update(channel=channel, ts=msg_ts, text=translated_question)
             return
@@ -272,11 +311,23 @@ def process_query(raw_query, say, client, channel, user_id):
  
         # Step 7 — send answer
         final_text = f"{result['answer']}\n\n_Source: {result['source']}_"
-        if DEBUG_MODE:
-            pii_flag = "🔒 PII masked  |  " if pii_masked else ""
+        if debug_level == "compact":
             tool_label = TOOL_LABELS.get(tool_used, tool_used)
             elapsed = round(time.time() - t_start, 2)
+            pii_flag = "🔒 PII masked  |  " if query != raw_query else ""
             final_text += f"\n\n```[DEBUG]  {pii_flag}🛠 Tool: {tool_label}  |  ⏱ {elapsed}s```"
+        elif debug_level == "extended":
+            tool_label = TOOL_LABELS.get(tool_used, tool_used)
+            elapsed = round(time.time() - t_start, 2)
+            t = result.get("timings", {})
+            final_text += (
+                f"\n\n```[DEBUG EXTENDED]"
+                f"\n  Intent classify:   {t.get('classify', '—')}s"
+                f"\n  Tool dispatch:     {t.get('dispatch', '—')}s"
+                f"\n  Translate answer:  {t.get('translate', '—')}s"
+                f"\n  ─────────────────────────"
+                f"\n  Total:             {elapsed}s  |  🛠 {tool_label}```"
+            )
         client.chat_update(
                 channel=channel,
                 ts=msg_ts,
@@ -323,7 +374,11 @@ def handle_mention(event, say, client):
 def detect_language2(text: str) -> str:
     # .classify() returns a tuple: (language_code, confidence_score)
     lang, confidence = langid.classify(text)
-        
+    print(f"[LANGID] Detected language: {lang} with confidence {confidence}")
+
+    if confidence > -10:
+        return "en"
+
     return lang
 
 
