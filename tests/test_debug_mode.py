@@ -34,12 +34,28 @@ TOOL_LABELS = {
 }
 
 TEST_PROMPTS = [
-    "I'm Hans, how many vacation days do I get?",
-    "Is May 1st a holiday in Basel?",
-    "Can I expense a 40 CHF client lunch?",
-    "My grandmother passed away, how many days off do I get?",
-    "Is May 1st a holiday in Basel? --debug/compact",
+    # ── English ──────────────────────────────────────────────────────────
+    "I'm Hans, how many vacation days do I get? --debug/extended",
+    "Is May 1st a holiday in Basel? --debug/extended",
     "Can I expense a 40 CHF client lunch? --debug/extended",
+    "My grandmother passed away, how many days off do I get? --debug/extended",
+    "Is January 1st a holiday in Zurich? --debug/extended",
+    "I have a problem with my manager. What should i do? --debug/extended",
+    "Fire emergency in the office --debug/extended",
+    "Family emergency --debug/extended",
+    "Company history --debug/extended",
+    # ── French ───────────────────────────────────────────────────────────
+    "Est-ce que le 1er mai est un jour férié à Genève? --debug/extended",       # holiday → GE
+    "Puis-je rembourser un déjeuner client de 30 CHF? --debug/extended",        # expense → under limit
+    "Combien de jours de congé ai-je par an? --debug/extended",                 # policy → vacation
+    "Ma grand-mère est décédée, combien de jours de congé ai-je? --debug/extended",  # policy → bereavement
+    "J'ai un problème avec mon collègue. Que dois-je faire? --debug/extended",  # policy → wellbeing
+    # ── German ───────────────────────────────────────────────────────────
+    "Ist der 1. August ein Feiertag in Zürich? --debug/extended",               # holiday → ZH
+    "Kann ich ein Mittagessen von 50 CHF abrechnen? --debug/extended",          # expense → over limit
+    "Wie viele Urlaubstage habe ich pro Jahr? --debug/extended",                # policy → vacation
+    "Meine Großmutter ist gestorben, wie viele Tage bekomme ich frei? --debug/extended",  # policy → bereavement
+    "Es gibt einen Feueralarm im Büro. Was soll ich tun? --debug/extended",     # policy → safety
 ]
 
 def say(msg):
@@ -86,7 +102,9 @@ def emulate(raw_query):
 
     lang, _ = langid.classify(query)
     user_lang = lang if lang in ("de", "en", "fr", "it") else "en"
+    t_translate_query = time.time()
     query_in_english = translate_text(query, "en", user_lang)
+    t_translate_query_done = round(time.time() - t_translate_query, 2)
 
     result, tool_used = respond(query_in_english, user_lang)
 
@@ -103,13 +121,42 @@ def emulate(raw_query):
     elif debug_level == "extended":
         tool_label = TOOL_LABELS.get(tool_used, tool_used)
         elapsed = round(time.time() - t_start, 2)
-        t = result.get("timings", {})
+        dbg = result.get("debug", {})
+        t = dbg.get("timings", result.get("timings", {}))
+        retries = dbg.get("retries", {})
+        cache = dbg.get("cache", {})
+
+        def _ann(step):
+            r = retries.get(step)
+            if r and r.get("count"):
+                n = r["count"]
+                return f"  ⚠️ {n} retr{'y' if n == 1 else 'ies'} — {r['reason']}"
+            c = cache.get(step)
+            return f"  (cache: {c})" if c else ""
+
+        dm = dbg.get("dispatch_meta") or {}
+        dispatch_sub = ""
+        if dm.get("policy_type"):
+            dispatch_sub += f"\n    Policy type:     {dm['policy_type']}"
+        if dm.get("emergency"):
+            dispatch_sub += f"\n    Emergency:       {dm['emergency']}"
+        if dm.get("role_required"):
+            dispatch_sub += f"\n    Role required:   {dm['role_required']}"
+
+        translate_query_line = (
+            f"\n  Translate query:   {t_translate_query_done}s"
+            if user_lang != "en" else ""
+        )
         final_text += (
             f"\n\n```[DEBUG EXTENDED]"
-            f"\n  Intent classify:   {t.get('classify', '—')}s"
-            f"\n  Tool dispatch:     {t.get('dispatch', '—')}s"
-            f"\n  Translate answer:  {t.get('translate', '—')}s"
-            f"\n  ─────────────────────────"
+            f"\n  Language:          {dbg.get('lang', '—')}"
+            f"\n  Intent:            {dbg.get('intent', '—')}"
+            f"\n  ─────────────────────────────"
+            f"{translate_query_line}"
+            f"\n  Intent classify:   {t.get('classify', '—')}s{_ann('classify')}"
+            f"\n  Tool dispatch:     {t.get('dispatch', '—')}s{_ann('dispatch')}{dispatch_sub}"
+            f"\n  Translate answer:  {t.get('translate', '—')}s{_ann('translate')}"
+            f"\n  ─────────────────────────────"
             f"\n  Total:             {elapsed}s  |  🛠 {tool_label}```"
         )
 
