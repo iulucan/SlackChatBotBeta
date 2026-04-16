@@ -53,7 +53,7 @@ client = genai.Client(api_key=os.getenv('GEMINI_API_KEY'))
 logger = logging.getLogger(__name__)
 
 # Valid intents
-VALID_INTENTS = ["policy", "holiday", "expense"]
+VALID_INTENTS: Set[str] = {"policy", "holiday", "expense", "others"}
 
 # Keyword lists for deterministic routing in dispatch()
 HANDBOOK_KEYWORDS = [
@@ -103,7 +103,7 @@ SYSTEM_PROMPT = load_system_prompt()
 config_standard_AFC = types.GenerateContentConfig(
     system_instruction=SYSTEM_PROMPT,
     # Low temperature is crucial for RAG/Fact-based bots to reduce hallucinations (LLM09)
-    temperature=0.1,
+    temperature=0.8,
     # Hard limit on output tokens to prevent DoS via massive text generation (LLM10)
     max_output_tokens=600,
     automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True)
@@ -121,7 +121,7 @@ extraction_schema = types.Schema(type=types.Type.OBJECT,
 config_standard_AFC_JSON = types.GenerateContentConfig(
     system_instruction=SYSTEM_PROMPT,
     # Low temperature is crucial for RAG/Fact-based bots to reduce hallucinations (LLM09)
-    temperature=0.1,
+    temperature=0.2,
     # Hard limit on output tokens to prevent DoS via massive text generation (LLM10)
     max_output_tokens=600,
     automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
@@ -189,16 +189,17 @@ def classify_intent(text: str) -> str:
     - policy:  working hours, leave, bereavement, handbook rules
     - holiday: public holidays, Basel-Stadt calendar
     - expense: expense claims, reimbursements, receipts
+    - others: all others requests
 
     Interface contract (do not change):
         Input:  text: str
-        Output: "policy" | "holiday" | "expense"
+        Output: "policy" | "holiday" | "expense" | "others"
 
     Args:
         text: the employee's sanitized question
 
     Returns:
-        str: one of "policy", "holiday", "expense"
+        str: one of "policy", "holiday", "expense", or "others"
     """
     prompt = f"""
 You are an HR assistant router for GreenLeaf Logistics in Basel, Switzerland.
@@ -211,10 +212,11 @@ Categories:
            whether a specific date is a holiday
 - expense: questions about expense claims, reimbursements,
            receipts, lunch costs, what can be expensed
+- others: all others requests that can be handled by you as a Large Language Model (LLM)
 
 Employee question: "{text}"
 
-Reply with exactly one word only: policy, holiday, or expense.
+Reply with exactly one word only: policy, holiday, expense, or others.
 Do not explain. Do not add punctuation. Just one word.
 """
     response = generate_with_backoff(
@@ -226,8 +228,8 @@ Do not explain. Do not add punctuation. Just one word.
 
     # Validate response is one of the expected intents
     if intent not in VALID_INTENTS:
-        print(f"[BRAIN] Unexpected intent from Gemini: {intent} — defaulting to policy")
-        return "policy"
+        print(f"[BRAIN] Unexpected intent from Gemini: {intent} — defaulting to others")
+        return "others"
 
     print(f"[BRAIN] Intent classified as: {intent}")
     return intent
@@ -478,8 +480,7 @@ def dispatch(intent: str, text: str, user_lang: str = "en") -> dict:
         return result
 
     elif intent == "holiday":
-        text_lower_check = text.lower()
-        detected_language = user_lang
+        detected_language = user_lang.upper()
 
         # 1. Use Gemini to detect the date and Canton via Structured JSON Output
         extraction_prompt = f"""
@@ -495,16 +496,6 @@ def dispatch(intent: str, text: str, user_lang: str = "en") -> dict:
                 - If no year is mentioned, default to the current year.
                 - Calculate relative dates (like "tomorrow") based on the current date.
                 """
-
-        # Using types.Schema to properly trigger the 'parsed' object in google.genai
-        extraction_schema = types.Schema(
-            type=types.Type.OBJECT,
-            properties={
-                "date": types.Schema(type=types.Type.STRING, description="YYYY-MM-DD format"),
-                "canton": types.Schema(type=types.Type.STRING, description="2-letter Canton code")
-            },
-            required=["date", "canton"]
-        )
 
         try:
             extraction_response = generate_with_backoff(
@@ -530,7 +521,7 @@ def dispatch(intent: str, text: str, user_lang: str = "en") -> dict:
         except Exception as e:
             print(f"[BRAIN ERROR] Could not extract date and Canton via Gemini: {e}")
             error_msg = translate_text("I couldn't understand the exact date or Canton you're asking about.",
-                                            target_lang=detected_language, source_lang="en")
+                                            target_lang=user_lang, source_lang="en")
             return {"error": error_msg}
 
         # 2. Check the OpenHolidays API
@@ -545,27 +536,69 @@ def dispatch(intent: str, text: str, user_lang: str = "en") -> dict:
             else:
                 english_answer = f"No, {formatted_date} is NOT a holiday in {canton_to_check_for_holiday}."
 
-            holiday_answer = translate_text(english_answer, target_lang=detected_language, source_lang="en")
-            print(f"[BRAIN] Holiday answer: {holiday_answer}")
-            return {"answer": holiday_answer, "source": "OpenHolidays API call."}
+            holiday_answer = english_answer
+
+            if user_lang == "en":
+                print(f"[BRAIN] Holiday answer: {holiday_answer}")
+                return {"answer": holiday_answer, "source": "OpenHolidays API call."}
+            elif user_lang == "de":
+                print(f"[BRAIN] Holiday answer: {holiday_answer}")
+                holiday_answer_translated = translate_text(holiday_answer, target_lang=user_lang, source_lang="en")
+                return {"answer": holiday_answer_translated, "source": "OpenHolidays-API-Aufruf."}
+            elif user_lang == "fr":
+                print(f"[BRAIN] Holiday answer: {holiday_answer}")
+                holiday_answer_translated = translate_text(holiday_answer, target_lang=user_lang, source_lang="en")
+                return {"answer": holiday_answer_translated, "source": "Appel d'API OpenHolidays."}
+            elif user_lang == "it":
+                print(f"[BRAIN] Holiday answer: {holiday_answer}")
+                holiday_answer_translated = translate_text(holiday_answer, target_lang=user_lang, source_lang="en")
+                return {"answer": holiday_answer_translated, "source": "Chiamata API OpenHolidays."}
+            else:
+                holiday_answer_translated = translate_text(holiday_answer, target_lang=user_lang, source_lang="en"),
+                holiday_source_translated = translate_text("OpenHolidays API call.", target_lang=user_lang, source_lang="en")
+                return {"answer": holiday_answer_translated, "source": holiday_source_translated}
 
         except Exception as e:
             print(f"[BRAIN ERROR] OpenHolidays API request failed: {e}")
             holiday_answer = translate_text("I'm sorry, I couldn't fetch the holiday data at this moment.",
-                                            target_lang=detected_language, source_lang="en")
-            return {
-                "answer": holiday_answer,
-                "source": "OpenHolidays API call."
-            }
+                                            target_lang=user_lang, source_lang="en")
+            return {"answer": holiday_answer, "source": "OpenHolidays API failed request."}
 
     elif intent == "expense":
         return validate_expense(text)
 
-    else:
-        return {
-            "error": "I could not understand your question. Please contact HR directly."
-        }
+    elif intent == "others":
+        text = f"""
+            You are a professional and helpful HR and IT assistant for GreenLeaf Logistics.
+            CRUCIALLY: respect your already set system prompt and system instructions.
+            The employee said: "{text}"
 
+            Please respond politely and concisely to their message. 
+            Crucially: 
+            - Act as a conversational assistant. 
+            - Do NOT act as a language detector and do NOT output just a language code.
+            """
+        response_to_others = generate_with_backoff(
+            prompt_entered=text,
+            model_name="gemini-2.5-flash",
+            config_type=config_standard_AFC
+        )
+        response_to_others_text = response_to_others.text
+        if user_lang == "en":
+            return {"answer": response_to_others_text, "source": "Our beautiful Large Language Model (LLM)."}
+        elif user_lang == "de":
+            response_translated = translate_text(str(response_to_others_text), target_lang="de", source_lang="en")
+            return {"answer": response_translated, "source": "Unser schönes Large Language Model (LLM)."}
+        elif user_lang == "fr":
+            response_translated = translate_text(str(response_to_others_text), target_lang="fr", source_lang="en")
+            return {"answer": response_translated, "source": "Notre beau large modèle de langage (LLM)."}
+        elif user_lang == "it":
+            response_translated = translate_text(str(response_to_others_text), target_lang="fr", source_lang="en")
+            return {"answer": response_translated, "source": "Il nostro bel modello linguistico di grandi dimensioni (LLM)."}
+        else:
+            response_translated = translate_text(str(response_to_others_text), target_lang=user_lang, source_lang="en")
+            source_translated = translate_text("Our beautiful Large Language Model (LLM).", target_lang=user_lang, source_lang="en")
+            return {"answer": response_translated, "source": source_translated}
 
 # ─────────────────────────────────────────────
 # MAIN RESPOND FUNCTION — called by app.py
@@ -708,9 +741,7 @@ def translate_text(text: str, target_lang: str, source_lang: str = None) -> str:
             "en": "English",
             "de": "German",
             "fr": "French",
-            "it": "Italian",
-            "es": "Spanish",
-            "ru": "Russian"
+            "it": "Italian"
         }
 
         target_name = lang_names.get(target_lang.lower(), target_lang)
