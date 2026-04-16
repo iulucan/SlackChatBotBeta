@@ -23,6 +23,7 @@ import sys
 import json
 import time
 import logging
+import threading
 from typing import Set
 from datetime import date, datetime
 from functools import lru_cache
@@ -135,11 +136,33 @@ def is_retryable_error(exception: BaseException) -> bool:
     return (any(err in error_str for err in ["503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED", "ServerError"])
             or class_name in ["ServerError", "ServiceUnavailable", "ResourceExhausted", "APIError"])
 
+# Thread-local retry log — each thread (Slack request) has its own isolated log
+# Prevents retry data from one user leaking into another's debug output
+_thread_local = threading.local()
+
+def _get_retry_log():
+    if not hasattr(_thread_local, "retry_log"):
+        _thread_local.retry_log = []
+    return _thread_local.retry_log
+
+def _before_sleep_handler(retry_state):
+    """Captures retry count and reason for debug output."""
+    exc = retry_state.outcome.exception()
+    error_str = str(exc)
+    if "503" in error_str or "UNAVAILABLE" in error_str or "ServerError" in error_str:
+        reason = "503 server capacity"
+    elif "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
+        reason = "429 rate limit"
+    else:
+        reason = "API error"
+    _get_retry_log().append({"attempt": retry_state.attempt_number, "reason": reason})
+    print(f"[BRAIN] Capacity issue. Retrying... (Attempt {retry_state.attempt_number}) — {reason}")
+
 @retry(
     retry=retry_if_exception(is_retryable_error),
-    stop=stop_after_attempt(8),
-    wait=wait_exponential_jitter(initial=1, max=30),
-    before_sleep=lambda rs: print(f"[BRAIN] Capacity issue. Retrying... (Attempt {rs.attempt_number})"),
+    stop=stop_after_attempt(4),
+    wait=wait_exponential_jitter(initial=1, max=8),
+    before_sleep=_before_sleep_handler,
     reraise=True # Crucial fix: Forces Tenacity to raise the actual APIError instead of RetryError
 )
 def generate_with_backoff(model_name, prompt_entered, config_type):
@@ -177,8 +200,7 @@ def classify_intent(text: str) -> str:
     Returns:
         str: one of "policy", "holiday", "expense"
     """
-    try:
-        prompt = f"""
+    prompt = f"""
 You are an HR assistant router for GreenLeaf Logistics in Basel, Switzerland.
 Your only job is to classify employee questions into exactly one category.
 
@@ -195,24 +217,20 @@ Employee question: "{text}"
 Reply with exactly one word only: policy, holiday, or expense.
 Do not explain. Do not add punctuation. Just one word.
 """
-        response = generate_with_backoff(
-            prompt_entered=prompt,
-            model_name="gemini-2.5-flash-lite",
-            config_type=config_standard_AFC
-        )
-        intent = response.text.strip().lower()
+    response = generate_with_backoff(
+        prompt_entered=prompt,
+        model_name="gemini-2.5-flash-lite",
+        config_type=config_standard_AFC
+    )
+    intent = response.text.strip().lower()
 
-        # Validate response is one of the expected intents
-        if intent not in VALID_INTENTS:
-            print(f"[BRAIN] Unexpected intent from Gemini: {intent} — defaulting to policy")
-            return "policy"
-
-        print(f"[BRAIN] Intent classified as: {intent}")
-        return intent
-
-    except Exception as e:
-        print(f"[BRAIN ERROR] Classification failed: {e.__class__.__name__}: {e} — defaulting to policy")
+    # Validate response is one of the expected intents
+    if intent not in VALID_INTENTS:
+        print(f"[BRAIN] Unexpected intent from Gemini: {intent} — defaulting to policy")
         return "policy"
+
+    print(f"[BRAIN] Intent classified as: {intent}")
+    return intent
 
 # ─────────────────────────────────────────────
 # POLICY TYPE CLASSIFICATION
@@ -425,15 +443,21 @@ def dispatch(intent: str, text: str, user_lang: str = "en") -> dict:
             policy_type = classify_policy_type(text)
 
         if policy_type == "policy_wellbeing":
-            return query_policy_wellbeing(text)
+            result = query_policy_wellbeing(text)
+            result["_dispatch_meta"] = {"policy_type": "wellbeing"}
+            return result
 
         # Emergency pre-check — always run, no keyword trigger
         # Gemini classifies every policy question; returns "other" for non-emergency queries
         emergency_type = classify_emergency_type(text)
         if emergency_type == "bereavement":
-            return query_policy_handbook("bereavement special leave personal tragedy")
+            result = query_policy_handbook("bereavement special leave personal tragedy")
+            result["_dispatch_meta"] = {"policy_type": "handbook", "emergency": "bereavement"}
+            return result
         elif emergency_type == "safety":
-            return query_policy_handbook("fire safety emergency procedure")
+            result = query_policy_handbook("fire safety emergency procedure")
+            result["_dispatch_meta"] = {"policy_type": "handbook", "emergency": "safety"}
+            return result
         # "other" falls through to normal flow
 
         if needs_role_clarification(text):
@@ -445,10 +469,13 @@ def dispatch(intent: str, text: str, user_lang: str = "en") -> dict:
                     "• Warehouse staff\n"
                     "• Customer support\n"
                     "• General office staff"
-                )
+                ),
+                "_dispatch_meta": {"policy_type": "handbook", "emergency": "other", "role_required": "YES"},
             }
 
-        return query_policy_handbook(text)
+        result = query_policy_handbook(text)
+        result["_dispatch_meta"] = {"policy_type": "handbook", "emergency": "other", "role_required": "NO"}
+        return result
 
     elif intent == "holiday":
         text_lower_check = text.lower()
@@ -566,31 +593,73 @@ def respond(text_in_english: str, user_lang: str, user_id: str = "unknown") -> t
     try:
         t0 = time.time()
 
-        # Step 1: Classify intent
+        # Step 1: Classify intent — track cache hit and retries
+        # Exception is intentionally NOT caught inside classify_intent so that
+        # lru_cache never stores a failure fallback (only successful results are cached).
+        _get_retry_log().clear()
+        cache_before_classify = classify_intent.cache_info()
         t1 = time.time()
-        intent = classify_intent(text_in_english)
-        print(f"[BRAIN] Step 1 classify_intent: {round(time.time() - t1, 2)}s")
-
-        # Step 2: Dispatch
+        try:
+            intent = classify_intent(text_in_english)
+        except Exception as e:
+            print(f"[BRAIN ERROR] Classification failed: {e.__class__.__name__}: {e} — defaulting to policy")
+            intent = "policy"
         t2 = time.time()
-        result = dispatch(intent, text_in_english, user_lang)
-        print(f"[BRAIN] Step 2 dispatch: {round(time.time() - t2, 2)}s")
+        cache_after_classify = classify_intent.cache_info()
+        classify_cache = "hit" if cache_after_classify.hits > cache_before_classify.hits else "miss"
+        classify_retries = list(_get_retry_log())
+        print(f"[BRAIN] Step 1 classify_intent: {round(t2 - t1, 2)}s (cache: {classify_cache})")
 
-        # Step 3: Convert answer back to user's language if needed
+        # Step 2: Dispatch — track retries
+        _get_retry_log().clear()
+        t2_disp = time.time()
+        result = dispatch(intent, text_in_english, user_lang)
         t3 = time.time()
+        dispatch_retries = list(_get_retry_log())
+        print(f"[BRAIN] Step 2 dispatch: {round(t3 - t2_disp, 2)}s")
+
+        # Step 3: Convert answer back to user's language if needed — track cache hit and retries
+        _get_retry_log().clear()
+        cache_before_translate = translate_text.cache_info()
+        t3_tr = time.time()
         if "answer" in result:
             result["answer"] = translate_text(result["answer"], user_lang, "en")
-        t_translate = round(time.time() - t3, 2)
-        print(f"[BRAIN] Step 3 translate_answer: {t_translate}s")
+        t4 = time.time()
+        cache_after_translate = translate_text.cache_info()
+        translate_cache = "hit" if cache_after_translate.hits > cache_before_translate.hits else "skip" if "answer" not in result else "miss"
+        translate_retries = list(_get_retry_log())
+        t_translate = round(t4 - t3_tr, 2)
+        print(f"[BRAIN] Step 3 translate_answer: {t_translate}s (cache: {translate_cache})")
 
         t_total = round(time.time() - t0, 2)
         print(f"[BRAIN] Total response time: {t_total}s")
 
-        result["timings"] = {
-            "classify": round(t2 - t1, 2),
-            "dispatch": round(t3 - t2, 2),
-            "translate": t_translate,
-            "total": t_total,
+        def _retry_summary(retries):
+            if not retries:
+                return None
+            return {"count": len(retries), "reason": retries[-1]["reason"]}
+
+        dispatch_meta = result.pop("_dispatch_meta", None)
+
+        result["debug"] = {
+            "intent":  intent,
+            "lang":    user_lang,
+            "timings": {
+                "classify": round(t2 - t1, 2),
+                "dispatch": round(t3 - t2_disp, 2),
+                "translate": t_translate,
+                "total": t_total,
+            },
+            "retries": {
+                "classify": _retry_summary(classify_retries),
+                "dispatch": _retry_summary(dispatch_retries),
+                "translate": _retry_summary(translate_retries),
+            },
+            "cache": {
+                "classify": classify_cache,
+                "translate": translate_cache,
+            },
+            "dispatch_meta": dispatch_meta,
         }
 
         tool_used = f"{intent}_tool"
@@ -603,6 +672,10 @@ def respond(text_in_english: str, user_lang: str, user_id: str = "unknown") -> t
             intent,
         )
         error_message = "Something went wrong. Please contact HR directly."
+        if is_retryable_error(e):
+            error_message = "Our AI service is temporarily busy. Please try again in a moment."
+        else:
+            error_message = "Something went wrong. Please contact HR directly."
         error_message_in_user_lang = translate_text(error_message, user_lang, "en")
         return {
             "error": error_message_in_user_lang,
