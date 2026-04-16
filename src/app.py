@@ -378,7 +378,7 @@ def detect_language2(text: str) -> str:
 
     if confidence > -10:
         return "en"
-
+        
     return lang
 
 
