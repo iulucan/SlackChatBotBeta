@@ -49,6 +49,7 @@ from src.tools.holiday_tool import SwissHolidayChecker
 load_dotenv()
 
 client = genai.Client(api_key=os.getenv('GEMINI_API_KEY'))
+logger = logging.getLogger(__name__)
 
 # Valid intents
 VALID_INTENTS = ["policy", "holiday", "expense"]
@@ -182,11 +183,11 @@ You are an HR assistant router for GreenLeaf Logistics in Basel, Switzerland.
 Your only job is to classify employee questions into exactly one category.
 
 Categories:
-- policy:  questions about working hours, attendance, leave rules, 
+- policy:  questions about working hours, attendance, leave rules,
            bereavement, vacation days, handbook rules, remote work
-- holiday: questions about public holidays, Basel-Stadt calendar, 
+- holiday: questions about public holidays, Basel-Stadt calendar,
            whether a specific date is a holiday
-- expense: questions about expense claims, reimbursements, 
+- expense: questions about expense claims, reimbursements,
            receipts, lunch costs, what can be expensed
 
 Employee question: "{text}"
@@ -459,7 +460,7 @@ def dispatch(intent: str, text: str, user_lang: str = "en") -> dict:
                 The current date is: {date.today().isoformat()}
 
                 Extract the specific date and the Swiss Canton mentioned.
-                Switzerland has 26 Cantons with these 2-letter codes: 
+                Switzerland has 26 Cantons with these 2-letter codes:
                 AG, AR, AI, BL, BS, BE, FR, GE, GL, GR, JU, LU, NE, NW, OW, SG, SH, SZ, SO, TG, TI, UR, VD, VS, ZH, ZG.
 
                 Rules:
@@ -543,7 +544,7 @@ def dispatch(intent: str, text: str, user_lang: str = "en") -> dict:
 # MAIN RESPOND FUNCTION — called by app.py
 # ─────────────────────────────────────────────
 
-def respond(text_in_english: str, user_lang: str) -> tuple:
+def respond(text_in_english: str, user_lang: str, user_id: str = "unknown") -> tuple:
     """
     Main function called by app.py.
     Classifies intent and dispatches to correct tool.
@@ -560,6 +561,8 @@ def respond(text_in_english: str, user_lang: str) -> tuple:
         tuple: (result dict, tool_used str)
     """
 
+    intent = "unknown"
+
     try:
         t0 = time.time()
 
@@ -572,6 +575,7 @@ def respond(text_in_english: str, user_lang: str) -> tuple:
         t2 = time.time()
         result = dispatch(intent, text_in_english, user_lang)
         print(f"[BRAIN] Step 2 dispatch: {round(time.time() - t2, 2)}s")
+        result.setdefault("intent", intent)
 
         # Step 3: Convert answer back to user's language if needed
         t3 = time.time()
@@ -594,10 +598,16 @@ def respond(text_in_english: str, user_lang: str) -> tuple:
         return result, tool_used
 
     except Exception as e:
+        logger.exception(
+            "[BRAIN ERROR] respond failed for user_id=%s intent=%s",
+            user_id,
+            intent,
+        )
         error_message = "Something went wrong. Please contact HR directly."
         error_message_in_user_lang = translate_text(error_message, user_lang, "en")
         return {
-            "error": error_message_in_user_lang
+            "error": error_message_in_user_lang,
+            "intent": intent,
         }, "unknown"
 
 
