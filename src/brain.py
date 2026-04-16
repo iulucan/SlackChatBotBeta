@@ -575,7 +575,6 @@ def respond(text_in_english: str, user_lang: str, user_id: str = "unknown") -> t
         t2 = time.time()
         result = dispatch(intent, text_in_english, user_lang)
         print(f"[BRAIN] Step 2 dispatch: {round(time.time() - t2, 2)}s")
-        result.setdefault("intent", intent)
 
         # Step 3: Convert answer back to user's language if needed
         t3 = time.time()
@@ -595,7 +594,7 @@ def respond(text_in_english: str, user_lang: str, user_id: str = "unknown") -> t
         }
 
         tool_used = f"{intent}_tool"
-        return result, tool_used
+        return result, tool_used, intent
 
     except Exception as e:
         logger.exception(
@@ -607,8 +606,7 @@ def respond(text_in_english: str, user_lang: str, user_id: str = "unknown") -> t
         error_message_in_user_lang = translate_text(error_message, user_lang, "en")
         return {
             "error": error_message_in_user_lang,
-            "intent": intent,
-        }, "unknown"
+        }, "unknown", intent
 
 
 @lru_cache(maxsize=128)

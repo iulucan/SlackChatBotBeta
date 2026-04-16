@@ -191,6 +191,7 @@ def process_query(raw_query, say, client, channel, user_id):
         6. Reply to employee
     """
     t_start = time.time()
+    user_lang = None
 
     # --- SECURE THE ID IMMEDIATELY ---
 
@@ -218,6 +219,10 @@ def process_query(raw_query, say, client, channel, user_id):
     if is_raw_blocked:
         say(get_block_message(raw_query))
         return
+
+    # Strip debug flags only after raw security checks have passed.
+    if debug_level in ("compact", "extended"):
+        raw_query = raw_query.replace("--debug/extended", "").replace("--debug/compact", "").strip()
 
  # --- STEP 1b: HANDSHAKE & SESSION VALIDATION ---
     if not session_mgr.has_session(secure_id):
@@ -297,7 +302,7 @@ def process_query(raw_query, say, client, channel, user_id):
         return
 
     # --- IMMEDIATE ACKNOWLEDGMENT UPDATED ---
-    if 'user_lang' not in locals():
+    if user_lang is None:
         if secure_id in conversation_state:
             state = conversation_state[secure_id]
             user_lang = state.get("language", "en")
@@ -431,7 +436,7 @@ def process_query(raw_query, say, client, channel, user_id):
             return
 
         # Step 4 — brain router
-        result, tool_used = respond(query_in_english, user_lang, user_id=secure_id)
+        result, tool_used, intent = respond(query_in_english, user_lang, user_id=secure_id)
 
         # --- LOGGING LOGIC ---
         session_id = session_mgr.get_session_id(secure_id)
@@ -442,7 +447,7 @@ def process_query(raw_query, say, client, channel, user_id):
                 session_id=session_id,
                 conversation_id=conversation_id,
                 masked_message=query,
-                intent=result.get("intent", "unknown"),
+                intent=intent,
                 tool_used=tool_used,
                 outcome="success",
             )
