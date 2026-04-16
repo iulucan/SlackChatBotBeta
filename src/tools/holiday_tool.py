@@ -72,7 +72,7 @@ class SwissHolidayChecker:
         "SO", "TG", "TI", "UR", "VD", "VS", "ZH", "ZG"
     }
 
-    def __init__(self, timeout: float = 5.0, language: str = "EN") -> None:
+    def __init__(self, timeout: float = 10.0, language: str = "EN") -> None:
         """
         Initializes the SwissHolidayChecker.
 
