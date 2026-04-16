@@ -280,14 +280,20 @@ def process_query(raw_query, say, client, channel, user_id):
             elif debug_level == "extended":
                 tool_label = TOOL_LABELS.get("policy_tool", "RAG (ChromaDB / FAISS)")
                 elapsed = round(time.time() - t_start, 2)
-                t_role_done = round(time.time() - t_role, 2)
-                t_handbook_done = round(time.time() - t_handbook, 2)
+                # Per-step durations (not cumulative)
+                t_role_done     = round(t_handbook - t_role, 2)
+                t_handbook_done = round(t_filter - t_handbook, 2)
+                t_filter_done   = round(t_translate_followup - t_filter, 2)
                 final_text += (
                     f"\n\n```[DEBUG EXTENDED]"
+                    f"\n  Flow:              follow-up (role clarification)"
+                    f"\n  Language:          {user_lang}"
+                    f"\n  ─────────────────────────────"
                     f"\n  Role validation:   {t_role_done}s"
                     f"\n  RAG lookup:        {t_handbook_done}s"
+                    f"\n  Role filter:       {t_filter_done}s"
                     f"\n  Translate answer:  {t_translate_done}s"
-                    f"\n  ─────────────────────────"
+                    f"\n  ─────────────────────────────"
                     f"\n  Total:             {elapsed}s  |  🛠 {tool_label}```"
                 )
             client.chat_update(channel=channel, ts=msg_ts, text=final_text)
@@ -319,13 +325,37 @@ def process_query(raw_query, say, client, channel, user_id):
         elif debug_level == "extended":
             tool_label = TOOL_LABELS.get(tool_used, tool_used)
             elapsed = round(time.time() - t_start, 2)
-            t = result.get("timings", {})
+            dbg = result.get("debug", {})
+            t = dbg.get("timings", result.get("timings", {}))
+            retries = dbg.get("retries", {})
+            cache = dbg.get("cache", {})
+
+            def _ann(step):
+                r = retries.get(step)
+                if r and r.get("count"):
+                    n = r["count"]
+                    return f"  ⚠️ {n} retr{'y' if n == 1 else 'ies'} — {r['reason']}"
+                c = cache.get(step)
+                return f"  (cache: {c})" if c else ""
+
+            dm = dbg.get("dispatch_meta") or {}
+            dispatch_sub = ""
+            if dm.get("policy_type"):
+                dispatch_sub += f"\n    Policy type:     {dm['policy_type']}"
+            if dm.get("emergency"):
+                dispatch_sub += f"\n    Emergency:       {dm['emergency']}"
+            if dm.get("role_required"):
+                dispatch_sub += f"\n    Role required:   {dm['role_required']}"
+
             final_text += (
                 f"\n\n```[DEBUG EXTENDED]"
-                f"\n  Intent classify:   {t.get('classify', '—')}s"
-                f"\n  Tool dispatch:     {t.get('dispatch', '—')}s"
-                f"\n  Translate answer:  {t.get('translate', '—')}s"
-                f"\n  ─────────────────────────"
+                f"\n  Language:          {dbg.get('lang', user_lang)}"
+                f"\n  Intent:            {dbg.get('intent', '—')}"
+                f"\n  ─────────────────────────────"
+                f"\n  Intent classify:   {t.get('classify', '—')}s{_ann('classify')}"
+                f"\n  Tool dispatch:     {t.get('dispatch', '—')}s{_ann('dispatch')}{dispatch_sub}"
+                f"\n  Translate answer:  {t.get('translate', '—')}s{_ann('translate')}"
+                f"\n  ─────────────────────────────"
                 f"\n  Total:             {elapsed}s  |  🛠 {tool_label}```"
             )
         client.chat_update(
