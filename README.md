@@ -6,25 +6,24 @@
 
 ### 1. Project Overview
 
-This repository contains the logic, data governance, and integration architecture for the GreenLeaf Logistics AI HR Agent. Our goal is to automate the Tier-1 support triage for GreenLeaf employees - it must be accurate, persistent, and secure. We build a production-ready Slack Agent that manages HR knowledge across three domains: Policies (RAG / Context Stuffing), Holidays (Live API), and Expenses (Python Logic)..
+This repository contains the logic, data governance, and integration architecture for the GreenLeaf Logistics AI HR Agent. Our goal is to automate the Tier-1 support triage for GreenLeaf employees - it must be accurate, persistent, and secure. We build a production-ready Slack Agent that manages HR knowledge across three domains: Policies (RAG), Holidays (OpenHolidays API), and Expenses (Python Logic).
 
 
 ### 2. 🛠 Tech Stack (Zero-Cost Tier)
-Generally speaking the Tech Stack is open for you to choose from. However be mindfull about which technologies you choose and make sure to be able to argument about why you made which decision.
 
--   **Interface:** __Slack Bolt for Python (Socket Mode)__, React (or any other Web Framework), or Python CLI with Textual.
+-   **Interface:** __Slack Bolt for Python (Socket Mode)__.
 
--   **Brain:** Gemini 2.5 Flash (cheap), but any other model is fine as well. We will provide API keys for you upon request. 
+-   **Brain:** Gemini 2.5 Flash Gemini 2.5 Flash-Lite (cheap). 
 
--   **Orchestration:** LangChain Agents, __custom Python Router__ or Agent Development Kit from Google.
+-   **Orchestration:** __Custom Python router__.
 
--   **Database:** __ChromaDB (Local Vector Store)__ + SQLite (Session Memory), or any equivalent.
+-   **Database:** __ChromaDB (Local Vector Store)__ + SQLite (Session Memory).
 
--   **External APIs:** OpenHolidays API (https://www.openholidaysapi.org) (For Swiss/Cantonal data).
+-   **External APIs:** OpenHolidays API (https://www.openholidaysapi.org) (For Swiss/Cantonal holidays data).
     
--   **Documentation:** GitHub Wiki (Technical Specs)
+-   **Documentation:** GitHub Wiki (Technical Specs).
     
--   **Version Control:** GitHub Classroom
+-   **Version Control:** GitHub Classroom.
     
 
 ### 3. How to Navigate
@@ -39,13 +38,13 @@ Generally speaking the Tech Stack is open for you to choose from. However be min
     
 
 ### 4. Project Objectives
-1. **Architectual Decisions** Each architectural decision must be backed by rational arguments that you must be able to explain.
+1. **Architectual Decisions** Architectural decision are backed by rational arguments that are explainable.
 
-1.  **Multi-Tool Orchestrator:** Successfully identify if a user query needs to call an API, use RAG or Python Logic.
+1.  **Multi-Tool Orchestrator:** Identifying if a user query needs to call an API, use RAG or Python Logic.
     
-2.  **Persistent Conversations:** Ensure thread mapping and state management.
+2.  **Persistent Conversations:** Thread mapping and state management.
     
-3.  **Data Governance & Security:** Ensure no sensitive GreenLeaf data is leaked via prompt injection. Make sure the data sent to any external service is non-PII.
+3.  **Data Governance & Security:** No sensitive GreenLeaf data is leaked via prompt injection. The data sent to any external service is non-PII.
     
 
 ### 5. Collaboration
