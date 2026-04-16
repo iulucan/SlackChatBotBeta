@@ -60,6 +60,39 @@ TOOL_LABELS = {
 
 conversation_state = {}
 
+# ================================================================
+# PRIVACY & INTERNATIONALIZATION ADDITIONS FOR DATABASE
+# ================================================================
+
+import hashlib
+
+def get_hashed_user_id(user_id: str) -> str:
+    """
+    Anonymizes Slack ID for GDPR compliance before it touches
+    the session manager or logging database.
+    """
+    salt = os.environ.get("HASH_SALT", "greenleaf_ops_2026")
+    return hashlib.sha256((user_id + salt).encode()).hexdigest()[:16]
+
+# Multi-language name validation prompts for the "Handshake" phase
+ASK_NAME_MESSAGES = {
+    "en": "Hi! Before I can help you, could you please tell me your first name?",
+    "de": "Hallo! Bevor ich Ihnen helfen kann, nennen Sie mir bitte Ihren Vornamen.",
+    "fr": "Bonjour ! Avant que je puisse vous aider, pourriez-vous me donner votre prénom ?",
+    "it": "Ciao! Prima di poterti aiutare, potresti dirmi il tuo nome ?",
+}
+
+# Imports and initialization
+from src.session_logs.database import LoggingDatabase
+from src.session_logs.session_manager import SessionManager
+
+log_db = LoggingDatabase()
+session_mgr = SessionManager()
+
+# Dictionary for users waiting to verify their name
+HANDSHAKE_TIMEOUT_SECONDS = 15 * 60
+pending_questions = {}
+
 # ─────────────────────────────────────────────
 # FUZZY ROLE MATCHING
 # ─────────────────────────────────────────────
@@ -72,6 +105,16 @@ ROLE_KEYWORDS = [
     "office",
     "general",
 ]
+
+GREETING_MESSAGES = {
+    "en": "Hi! How can I help you today?",
+    "de": "Hallo! Wie kann ich Ihnen heute helfen?",
+    "fr": "Bonjour ! Comment puis-je vous aider aujourd'hui ?",
+    "it": "Ciao! Come posso aiutarti oggi?",
+}
+
+GREETING_WORDS = {"bonjour", "salut", "hi", "hello", "hallo", "ciao"}
+
 
 def fuzzy_match_role(text: str) -> bool:
     """
@@ -103,10 +146,42 @@ def fuzzy_match_role(text: str) -> bool:
     return False
 
 
+def send_or_update(client, say, channel, text, msg_ts=None):
+    """
+    Updates the placeholder Slack message when available.
+    Falls back to a normal reply if the placeholder was never created.
+    """
+    if msg_ts:
+        client.chat_update(channel=channel, ts=msg_ts, text=text)
+    else:
+        say(text)
+
+
+def is_greeting(text: str) -> bool:
+    """Returns True for plain greeting-only messages."""
+    return text.lower().strip() in GREETING_WORDS
+
+
+def cleanup_expired_pending_questions(now=None):
+    """
+    Removes abandoned handshake entries so pending_questions does not grow forever.
+    """
+    current_time = time.time() if now is None else now
+    expired_before = current_time - HANDSHAKE_TIMEOUT_SECONDS
+    expired_ids = [
+        secure_id
+        for secure_id, state in pending_questions.items()
+        if state.get("created_at", 0) < expired_before
+    ]
+
+    for secure_id in expired_ids:
+        pending_questions.pop(secure_id, None)
+
+
 def process_query(raw_query, say, client, channel, user_id):
     """
     Shared logic for DM messages and channel mentions.
- 
+
     Flow:
         1. IT security handler check on raw text first
         2. Security check on raw text (US-03)
@@ -116,6 +191,12 @@ def process_query(raw_query, say, client, channel, user_id):
         6. Reply to employee
     """
     t_start = time.time()
+    user_lang = None
+
+    # --- SECURE THE ID IMMEDIATELY ---
+
+    secure_id = get_hashed_user_id(user_id)
+    cleanup_expired_pending_questions()
 
     # Detect debug flag — READ ONLY, raw_query not modified yet
     if "--debug/extended" in raw_query:
@@ -134,36 +215,82 @@ def process_query(raw_query, say, client, channel, user_id):
         say(it_response)
         return
 
-    # Step 1b — Greeting check
-    # Intercept simple greetings before they reach brain.py / ChromaDB.
-    # Without this, "hello" returns "Sorry, I could not find an answer."
-    GREETINGS = {
-        "hello": "en", "hi": "en", "hey": "en", "yo": "en",
-        "good morning": "en", "good afternoon": "en", "good evening": "en",
-        "hallo": "de", "guten tag": "de", "guten morgen": "de", "guten abend": "de",
-        "bonjour": "fr", "bonsoir": "fr", "salut": "fr",
-        "ciao": "it", "buongiorno": "it", "buonasera": "it",
-    }
-    GREETING_RESPONSES = {
-        "en": "Hello! I'm the GreenLeaf HR Assistant. How can I help you today?",
-        "de": "Hallo! Ich bin der GreenLeaf HR-Assistent. Wie kann ich Ihnen heute helfen?",
-        "fr": "Bonjour! Je suis l'assistant RH GreenLeaf. Comment puis-je vous aider aujourd'hui?",
-        "it": "Ciao! Sono l'assistente HR di GreenLeaf. Come posso aiutarti oggi?",
-    }
-    greeting_lang = GREETINGS.get(raw_query.strip().lower())
-    if greeting_lang:
-        say(GREETING_RESPONSES[greeting_lang])
-        return
-
-    # Step 2 — security check on raw text first
     is_raw_blocked, _ = is_blocked(raw_query)
     if is_raw_blocked:
         say(get_block_message(raw_query))
         return
 
-    # Strip debug flag only after security checks have passed
+    # Strip debug flags only after raw security checks have passed.
     if debug_level in ("compact", "extended"):
         raw_query = raw_query.replace("--debug/extended", "").replace("--debug/compact", "").strip()
+
+ # --- STEP 1b: HANDSHAKE & SESSION VALIDATION ---
+    if not session_mgr.has_session(secure_id):
+        if secure_id not in pending_questions:
+            # First encounter: Detect language and ask for name
+            user_lang = detect_language2(raw_query)
+            pending_questions[secure_id] = {
+                "text": raw_query,
+                "attempts": 0,
+                "lang": user_lang,
+                "created_at": time.time(),
+            }
+            msg = ASK_NAME_MESSAGES.get(user_lang, ASK_NAME_MESSAGES["en"])
+            say(msg)
+            return
+        else:
+            # Handshake Phase: Validate the name provided
+            valid, matched_name = session_mgr.validate_name(raw_query)
+            h_lang = pending_questions[secure_id].get("lang", "en")
+
+            # CRITICAL: Define attempts here so it's available for both checks
+            pending_questions[secure_id]["attempts"] += 1
+            current_attempts = pending_questions[secure_id]["attempts"]
+
+            if not valid:
+                # SECURITY: Cleanup after 3 failed attempts
+                if current_attempts >= 3:
+                    final_fail = {
+                        "en": "Too many failed attempts. Please contact HR for assistance.",
+                        "fr": "Trop de tentatives échouées. Veuillez contacter les RH pour obtenir de l'aide.",
+                        "de": "Zu viele fehlgeschlagene Versuche. Bitte wenden Sie sich an die Personalabteilung.",
+                        "it": "Troppi tentativi falliti. Si prega di contattare le Risorse Umane per assistenza."
+                    }
+                    say(final_fail.get(h_lang, final_fail["en"]))
+                    pending_questions.pop(secure_id, None)
+                    return # Stop and clear state
+
+                 # Retry message (Issue #7)
+                fail_msgs = {
+                    "en": "I'm sorry, I couldn't find that name in our directory. Please try again.",
+                    "fr": "Désolé, je n'ai pas trouvé ce nom dans l'annuaire. Veuillez réessayer.",
+                    "de": "Entschuldigung, ich konnte diesen Namen nicht finden. Bitte versuchen Sie es erneut.",
+                    "it": "Scusa, non ho trovato questo nome nell'elenco. Riprova."
+                }
+                say(fail_msgs.get(h_lang, fail_msgs["en"]))
+                return # Stop and wait for the next message
+
+            # --- VALIDATION SUCCESSFUL ---
+            session_mgr.create_session(secure_id, matched_name)
+            user_data = pending_questions.pop(secure_id)
+
+            raw_query = user_data["text"]
+            user_lang = h_lang
+
+            msg_ts = None
+
+            first_name = matched_name.split()[0] if matched_name else "there"
+
+            # UX Optimization: Greeting check
+            if is_greeting(raw_query):
+                welcome_msgs = {
+                    "en": f"Verified! How can I help you today, {first_name}?",
+                    "fr": f"Vérifié ! Comment puis-je vous aider aujourd'hui, {first_name} ?",
+                    "de": f"Verifiziert! Wie kann ich Ihnen heute helfen, {first_name}?",
+                    "it": f"Verificato! Come posso aiutarti oggi, {first_name}?"
+                }
+                say(welcome_msgs.get(user_lang, welcome_msgs["en"]))
+                return
 
     # Step 3 — PII masking
     query = clean_input(raw_query)
@@ -174,13 +301,17 @@ def process_query(raw_query, say, client, channel, user_id):
         say(get_block_message(query))
         return
 
-    # --- NEW: IMMEDIATE ACKNOWLEDGMENT ---
-    # We use langid because it is local and instant (<0.01s)
-    if user_id in conversation_state:
-        state = conversation_state[user_id]
-        user_lang = state.get("language", "en")
-    else:
-        user_lang = detect_language2(query)
+    # --- IMMEDIATE ACKNOWLEDGMENT UPDATED ---
+    if user_lang is None:
+        if secure_id in conversation_state:
+            state = conversation_state[secure_id]
+            user_lang = state.get("language", "en")
+        else:
+            user_lang = detect_language2(query)
+
+    if session_mgr.has_session(secure_id) and is_greeting(query):
+        say(GREETING_MESSAGES.get(user_lang, GREETING_MESSAGES["en"]))
+        return
 
     wait_messages = {
         "en": "I'm checking that for you, please give me a moment... :mag:",
@@ -190,13 +321,14 @@ def process_query(raw_query, say, client, channel, user_id):
     }
     wait_text = wait_messages.get(user_lang, wait_messages["en"])
 
+    msg_ts = None
     # Send the first message immediately
     try:
         initial_response = client.chat_postMessage(
             channel=channel,
             text=wait_text
         )
-            
+
         msg_ts = initial_response["ts"]
         # You can save this to reply in a thread later if you want:
         # thread_ts = initial_response["ts"]
@@ -205,16 +337,16 @@ def process_query(raw_query, say, client, channel, user_id):
 
 
     try:
-
         query_in_english = translate_text(query, "en", user_lang)
         # Step 3 — check if waiting for follow-up from this user
-        if user_id in conversation_state:
+        if secure_id in conversation_state:
             t_followup = time.time()
+            state = conversation_state.pop(secure_id) # Use secure_id
 
-            state = conversation_state.pop(user_id)
             # Support both old plain string and new dict structure
             pending = state["pending"] if isinstance(state, dict) else state
             retries = state.get("retries", 0) if isinstance(state, dict) else 0
+            state_language = state.get("language", user_lang) if isinstance(state, dict) else user_lang
             # Restore debug_level from original message if not set in current message
             if debug_level is None:
                 debug_level = state.get("debug_level") if isinstance(state, dict) else None
@@ -235,14 +367,19 @@ def process_query(raw_query, say, client, channel, user_id):
                         "I'm having trouble identifying your role. Please start your question again and include your role, for example: 'As warehouse staff, when do I need to be in?'",
                         user_lang, "en"
                     )
-                    client.chat_update(channel=channel, ts=msg_ts, text=give_up_msg)
+                    send_or_update(client, say, channel, give_up_msg, msg_ts)
                     return
-                conversation_state[user_id] = {"pending": pending, "retries": retries, "debug_level": debug_level}
+                conversation_state[secure_id] = {
+                    "pending": pending,
+                    "retries": retries,
+                    "language": state_language,
+                    "debug_level": debug_level,
+                }
                 retry_msg = translate_text(
                     "I didn't catch that — could you rephrase? Please reply with one of:\n• Warehouse staff\n• Customer support\n• General office staff",
                     user_lang, "en"
                 )
-                client.chat_update(channel=channel, ts=msg_ts, text=retry_msg)
+                send_or_update(client, say, channel, retry_msg, msg_ts)
                 return
 
             # We already know this is a working hours question — skip dispatch/clarification loop
@@ -254,12 +391,17 @@ def process_query(raw_query, say, client, channel, user_id):
             print(f"[APP] Follow-up query_handbook: {round(time.time() - t_handbook, 2)}s")
 
             if "error" in handbook_result:
-                conversation_state[user_id] = {"pending": pending, "retries": retries, "debug_level": debug_level}
+                conversation_state[secure_id] = {
+                    "pending": pending,
+                    "retries": retries,
+                    "language": state_language,
+                    "debug_level": debug_level,
+                }
                 retry_msg = translate_text(
                     "I didn't catch that — could you rephrase? Please reply with one of:\n• Warehouse staff\n• Customer support\n• General office staff",
                     user_lang, "en"
                 )
-                client.chat_update(channel=channel, ts=msg_ts, text=retry_msg)
+                send_or_update(client, say, channel, retry_msg, msg_ts)
                 return
 
             t_filter = time.time()
@@ -296,25 +438,50 @@ def process_query(raw_query, say, client, channel, user_id):
                     f"\n  ─────────────────────────────"
                     f"\n  Total:             {elapsed}s  |  🛠 {tool_label}```"
                 )
-            client.chat_update(channel=channel, ts=msg_ts, text=final_text)
+            send_or_update(client, say, channel, final_text, msg_ts)
             return
- 
+
         # Step 4 — brain router
-        result, tool_used = respond(query_in_english, user_lang)
- 
+        result, tool_used, intent = respond(query_in_english, user_lang, user_id=secure_id)
+
+        # --- LOGGING LOGIC ---
+        session_id = session_mgr.get_session_id(secure_id)
+        conversation_id = session_mgr.get_conversation_id(secure_id)
+
+        if session_id and conversation_id:
+            log_db.log_interaction(
+                session_id=session_id,
+                conversation_id=conversation_id,
+                masked_message=query,
+                intent=intent,
+                tool_used=tool_used,
+                outcome="success",
+            )
+
         # Step 5 — handle clarification request
         if result.get("needs_clarification"):
-            print(query)
-            conversation_state[user_id] = {"pending": result.get("original_english", query), "retries": 0, "language": user_lang, "debug_level": debug_level}
+            # CHANGE user_id TO secure_id HERE
+            conversation_state[secure_id] = {
+                "pending": result.get("original_english", query),
+                "retries": 0,
+                "language": user_lang,
+                "debug_level": debug_level
+            }
             translated_question = translate_text(result["question"], user_lang, "en")
-            client.chat_update(channel=channel, ts=msg_ts, text=translated_question)
+            send_or_update(client, say, channel, translated_question, msg_ts)
             return
- 
+
         # Step 6 — handle error
         if "error" in result:
-            client.chat_update(channel=channel, ts=msg_ts, text="Sorry, I could not find an answer. Please contact HR.")
+            send_or_update(
+                client,
+                say,
+                channel,
+                "Sorry, I could not find an answer. Please contact HR.",
+                msg_ts,
+            )
             return
- 
+
         # Step 7 — send answer
         final_text = f"{result['answer']}\n\n_Source: {result['source']}_"
         if debug_level == "compact":
@@ -358,15 +525,11 @@ def process_query(raw_query, say, client, channel, user_id):
                 f"\n  ─────────────────────────────"
                 f"\n  Total:             {elapsed}s  |  🛠 {tool_label}```"
             )
-        client.chat_update(
-                channel=channel,
-                ts=msg_ts,
-                text=final_text
-            )
+        send_or_update(client, say, channel, final_text, msg_ts)
 
     except Exception as e:
         print(f"[APP ERROR] {e}")
-        client.chat_update(channel=channel, ts=msg_ts, text="An unexpected error occurred. Please try again later.")
+        send_or_update(client, say, channel, "An unexpected error occurred. Please try again later.", msg_ts)
 
 
 @app.message("")
@@ -402,15 +565,29 @@ def handle_mention(event, say, client):
 
 
 def detect_language2(text: str) -> str:
-    # .classify() returns a tuple: (language_code, confidence_score)
+    """
+    HEURISTIC DETECTION:
+    Prioritizes prefix matching for common greetings. This ensures the
+    Initial Handshake (Name Verification) uses the correct language prompt
+    even when langid lacks enough context for short sentences.
+    """
+    clean_text = text.lower().strip()
+    # Check if the text STARTS with a greeting, not just if it IS the greeting
+    if any(clean_text.startswith(g) for g in ["bonjour", "salut"]):
+        return "fr"
+    if any(clean_text.startswith(g) for g in ["hallo", "guten tag"]):
+        return "de"
+    if any(clean_text.startswith(g) for g in ["ciao", "buongiorno"]):
+        return "it"
+
     lang, confidence = langid.classify(text)
     print(f"[LANGID] Detected language: {lang} with confidence {confidence}")
 
-    if confidence > -10:
+    # UPDATED: Adjusted threshold. Only fallback to 'en' if AI is very unsure.
+    if confidence < -50:
         return "en"
-        
-    return lang
 
+    return lang
 
 if __name__ == "__main__":
     handler = SocketModeHandler(app, os.environ["SLACK_APP_TOKEN"])

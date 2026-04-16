@@ -50,6 +50,7 @@ from src.tools.holiday_tool import SwissHolidayChecker
 load_dotenv()
 
 client = genai.Client(api_key=os.getenv('GEMINI_API_KEY'))
+logger = logging.getLogger(__name__)
 
 # Valid intents
 VALID_INTENTS = ["policy", "holiday", "expense"]
@@ -486,7 +487,7 @@ def dispatch(intent: str, text: str, user_lang: str = "en") -> dict:
                 The current date is: {date.today().isoformat()}
 
                 Extract the specific date and the Swiss Canton mentioned.
-                Switzerland has 26 Cantons with these 2-letter codes: 
+                Switzerland has 26 Cantons with these 2-letter codes:
                 AG, AR, AI, BL, BS, BE, FR, GE, GL, GR, JU, LU, NE, NW, OW, SG, SH, SZ, SO, TG, TI, UR, VD, VS, ZH, ZG.
 
                 Rules:
@@ -570,7 +571,7 @@ def dispatch(intent: str, text: str, user_lang: str = "en") -> dict:
 # MAIN RESPOND FUNCTION — called by app.py
 # ─────────────────────────────────────────────
 
-def respond(text_in_english: str, user_lang: str) -> tuple:
+def respond(text_in_english: str, user_lang: str, user_id: str = "unknown") -> tuple:
     """
     Main function called by app.py.
     Classifies intent and dispatches to correct tool.
@@ -586,6 +587,8 @@ def respond(text_in_english: str, user_lang: str) -> tuple:
     Returns:
         tuple: (result dict, tool_used str)
     """
+
+    intent = "unknown"
 
     try:
         t0 = time.time()
@@ -660,17 +663,23 @@ def respond(text_in_english: str, user_lang: str) -> tuple:
         }
 
         tool_used = f"{intent}_tool"
-        return result, tool_used
+        return result, tool_used, intent
 
     except Exception as e:
+        logger.exception(
+            "[BRAIN ERROR] respond failed for user_id=%s intent=%s",
+            user_id,
+            intent,
+        )
+        error_message = "Something went wrong. Please contact HR directly."
         if is_retryable_error(e):
             error_message = "Our AI service is temporarily busy. Please try again in a moment."
         else:
             error_message = "Something went wrong. Please contact HR directly."
         error_message_in_user_lang = translate_text(error_message, user_lang, "en")
         return {
-            "error": error_message_in_user_lang
-        }, "unknown"
+            "error": error_message_in_user_lang,
+        }, "unknown", intent
 
 
 @lru_cache(maxsize=128)
